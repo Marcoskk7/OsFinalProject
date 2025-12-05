@@ -1,0 +1,1 @@
+/usr/bin/c++ CMakeFiles/osproj_client.dir/client/main.cpp.o CMakeFiles/osproj_client.dir/client/cli.cpp.o CMakeFiles/osproj_client.dir/client/net/tcp_client.cpp.o -o osproj_client 

@@ -1,0 +1,2 @@
+/usr/bin/ar qc libosproj_fs.a CMakeFiles/osproj_fs.dir/server/filesystem/vfs.cpp.o
+/usr/bin/ranlib libosproj_fs.a

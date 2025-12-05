@@ -1,0 +1,1 @@
+/usr/bin/c++ CMakeFiles/osproj_server.dir/server/main.cpp.o -o osproj_server  libosproj_server_core.a libosproj_domain.a libosproj_fs.a 

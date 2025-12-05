@@ -1,0 +1,2 @@
+/usr/bin/ar qc libosproj_server_core.a CMakeFiles/osproj_server_core.dir/server/server_app.cpp.o CMakeFiles/osproj_server_core.dir/server/net/tcp_server.cpp.o
+/usr/bin/ranlib libosproj_server_core.a
