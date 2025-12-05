@@ -10,13 +10,16 @@ src/CMakeFiles/osproj_server.dir/server/main.cpp.o
  /home/marcos/Cpp/OsProject/src/server/filesystem/inode.hpp
  /home/marcos/Cpp/OsProject/src/server/filesystem/superblock.hpp
  /home/marcos/Cpp/OsProject/src/server/filesystem/vfs.hpp
+ /home/marcos/Cpp/OsProject/src/server/net/tcp_server.hpp
  /home/marcos/Cpp/OsProject/src/server/server_app.hpp
  /usr/include/alloca.h
  /usr/include/asm-generic/errno-base.h
  /usr/include/asm-generic/errno.h
+ /usr/include/c++/13/array
  /usr/include/c++/13/atomic
  /usr/include/c++/13/backward/binders.h
  /usr/include/c++/13/bit
+ /usr/include/c++/13/bits/algorithmfwd.h
  /usr/include/c++/13/bits/alloc_traits.h
  /usr/include/c++/13/bits/allocated_ptr.h
  /usr/include/c++/13/bits/allocator.h
@@ -66,21 +69,26 @@ src/CMakeFiles/osproj_server.dir/server/main.cpp.o
  /usr/include/c++/13/bits/refwrap.h
  /usr/include/c++/13/bits/requires_hosted.h
  /usr/include/c++/13/bits/std_abs.h
+ /usr/include/c++/13/bits/std_function.h
+ /usr/include/c++/13/bits/stl_algo.h
  /usr/include/c++/13/bits/stl_algobase.h
  /usr/include/c++/13/bits/stl_bvector.h
  /usr/include/c++/13/bits/stl_construct.h
  /usr/include/c++/13/bits/stl_function.h
+ /usr/include/c++/13/bits/stl_heap.h
  /usr/include/c++/13/bits/stl_iterator.h
  /usr/include/c++/13/bits/stl_iterator_base_funcs.h
  /usr/include/c++/13/bits/stl_iterator_base_types.h
  /usr/include/c++/13/bits/stl_list.h
  /usr/include/c++/13/bits/stl_pair.h
+ /usr/include/c++/13/bits/stl_tempbuf.h
  /usr/include/c++/13/bits/stl_uninitialized.h
  /usr/include/c++/13/bits/stl_vector.h
  /usr/include/c++/13/bits/streambuf.tcc
  /usr/include/c++/13/bits/streambuf_iterator.h
  /usr/include/c++/13/bits/string_view.tcc
  /usr/include/c++/13/bits/stringfwd.h
+ /usr/include/c++/13/bits/uniform_int_dist.h
  /usr/include/c++/13/bits/unordered_map.h
  /usr/include/c++/13/bits/uses_allocator.h
  /usr/include/c++/13/bits/uses_allocator_args.h
@@ -89,6 +97,7 @@ src/CMakeFiles/osproj_server.dir/server/main.cpp.o
  /usr/include/c++/13/cctype
  /usr/include/c++/13/cerrno
  /usr/include/c++/13/clocale
+ /usr/include/c++/13/compare
  /usr/include/c++/13/cstddef
  /usr/include/c++/13/cstdint
  /usr/include/c++/13/cstdio
@@ -104,6 +113,7 @@ src/CMakeFiles/osproj_server.dir/server/main.cpp.o
  /usr/include/c++/13/ext/numeric_traits.h
  /usr/include/c++/13/ext/string_conversions.h
  /usr/include/c++/13/ext/type_traits.h
+ /usr/include/c++/13/functional
  /usr/include/c++/13/initializer_list
  /usr/include/c++/13/ios
  /usr/include/c++/13/iosfwd

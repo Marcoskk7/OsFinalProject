@@ -17,11 +17,20 @@ void ServerApp::run()
     // 挂载简化 VFS
     vfs_.mount("data.fs");
 
-    // 使用阻塞式 TCP 服务器，处理一次真实客户端请求
+    // 使用阻塞式 TCP 服务器，循环处理来自多个客户端的请求
     osp::net::TcpServer tcpServer(port_);
-    tcpServer.serveOnce([this](const osp::protocol::Message& req) {
-        return handleRequest(req);
-    });
+    while (running_.load())
+    {
+        const bool ok = tcpServer.serveOnce([this](const osp::protocol::Message& req) {
+            return handleRequest(req);
+        });
+
+        if (!ok)
+        {
+            osp::log(osp::LogLevel::Warn, "TcpServer::serveOnce failed, stopping server loop");
+            break;
+        }
+    }
 
     osp::log(osp::LogLevel::Info, "Server shutting down");
 }
