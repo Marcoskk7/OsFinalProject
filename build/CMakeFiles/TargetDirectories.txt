@@ -1,9 +1,0 @@
-/home/marcos/Cpp/OsProject/build/CMakeFiles/edit_cache.dir
-/home/marcos/Cpp/OsProject/build/CMakeFiles/rebuild_cache.dir
-/home/marcos/Cpp/OsProject/build/src/CMakeFiles/osproj_domain.dir
-/home/marcos/Cpp/OsProject/build/src/CMakeFiles/osproj_fs.dir
-/home/marcos/Cpp/OsProject/build/src/CMakeFiles/osproj_server_core.dir
-/home/marcos/Cpp/OsProject/build/src/CMakeFiles/osproj_server.dir
-/home/marcos/Cpp/OsProject/build/src/CMakeFiles/osproj_client.dir
-/home/marcos/Cpp/OsProject/build/src/CMakeFiles/edit_cache.dir
-/home/marcos/Cpp/OsProject/build/src/CMakeFiles/rebuild_cache.dir

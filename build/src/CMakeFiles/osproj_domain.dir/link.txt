@@ -1,2 +1,0 @@
-/usr/bin/ar qc libosproj_domain.a CMakeFiles/osproj_domain.dir/domain/user.cpp.o
-/usr/bin/ranlib libosproj_domain.a

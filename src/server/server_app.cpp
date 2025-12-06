@@ -1,5 +1,7 @@
 #include "server_app.hpp"
 
+#include <sstream>
+
 namespace osp::server
 {
 
@@ -47,16 +49,112 @@ osp::protocol::Message ServerApp::handleRequest(const osp::protocol::Message& re
 
     osp::log(osp::LogLevel::Info, "Received request payload: " + req.payload);
 
-    // 未来这里应根据 MessageType 和 payload 调用业务层 & VFS。
-    // 当前仅支持一个简单命令：LIST_PAPERS。
-    if (req.type == MessageType::CommandRequest && req.payload == "LIST_PAPERS")
+    if (req.type != MessageType::CommandRequest)
+    {
+        return {MessageType::Error, "Unsupported message type"};
+    }
+
+    std::istringstream iss(req.payload);
+    std::string cmd;
+    iss >> cmd;
+
+    if (cmd == "LIST_PAPERS")
     {
         Message resp{MessageType::CommandResponse, "No papers yet."};
         return resp;
     }
+    else if (cmd == "MKDIR")
+    {
+        std::string path;
+        iss >> path;
+        if (path.empty())
+        {
+            return {MessageType::Error, "MKDIR: missing path"};
+        }
 
-    Message errorResp{MessageType::Error, "Unknown command"};
-    return errorResp;
+        bool ok = vfs_.createDirectory(path);
+        return ok ? Message{MessageType::CommandResponse, "MKDIR ok: " + path}
+                  : Message{MessageType::Error, "MKDIR failed: " + path};
+    }
+    else if (cmd == "WRITE")
+    {
+        std::string path;
+        iss >> path;
+        if (path.empty())
+        {
+            return {MessageType::Error, "WRITE: missing path"};
+        }
+        std::string content;
+        std::getline(iss, content);
+        if (!content.empty() && content.front() == ' ')
+        {
+            content.erase(content.begin());
+        }
+
+        bool ok = vfs_.writeFile(path, content);
+        return ok ? Message{MessageType::CommandResponse, "WRITE ok: " + path}
+                  : Message{MessageType::Error, "WRITE failed: " + path};
+    }
+    else if (cmd == "READ")
+    {
+        std::string path;
+        iss >> path;
+        if (path.empty())
+        {
+            return {MessageType::Error, "READ: missing path"};
+        }
+
+        auto data = vfs_.readFile(path);
+        if (!data)
+        {
+            return {MessageType::Error, "READ failed: " + path};
+        }
+        return {MessageType::CommandResponse, *data};
+    }
+    else if (cmd == "RM")
+    {
+        std::string path;
+        iss >> path;
+        if (path.empty())
+        {
+            return {MessageType::Error, "RM: missing path"};
+        }
+
+        bool ok = vfs_.removeFile(path);
+        return ok ? Message{MessageType::CommandResponse, "RM ok: " + path}
+                  : Message{MessageType::Error, "RM failed: " + path};
+    }
+    else if (cmd == "RMDIR")
+    {
+        std::string path;
+        iss >> path;
+        if (path.empty())
+        {
+            return {MessageType::Error, "RMDIR: missing path"};
+        }
+
+        bool ok = vfs_.removeDirectory(path);
+        return ok ? Message{MessageType::CommandResponse, "RMDIR ok: " + path}
+                  : Message{MessageType::Error, "RMDIR failed (maybe not empty?): " + path};
+    }
+    else if (cmd == "LIST")
+    {
+        std::string path;
+        iss >> path;
+        if (path.empty())
+        {
+            path = "/";
+        }
+
+        auto listing = vfs_.listDirectory(path);
+        if (!listing)
+        {
+            return {MessageType::Error, "LIST failed: " + path};
+        }
+        return {MessageType::CommandResponse, *listing};
+    }
+
+    return {MessageType::Error, "Unknown command: " + cmd};
 }
 
 } // namespace osp::server
