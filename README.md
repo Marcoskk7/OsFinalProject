@@ -66,6 +66,8 @@ cmake --build . --target clean
 
 ### 运行示例
 
+构建结果位于./build/src下
+
 1. **启动服务器**
 
 ```bash
@@ -122,7 +124,7 @@ cmake --build . --target clean
      CMD_NAME [arg1 arg2 ...]
      ```
 
-  2. **携带会话前缀（推荐在需要鉴权的业务命令中使用）**
+  2. **携带会话前缀（推荐在需要鉴权的业务命令中使用, 已完成自动添加, 会用就行了）**
 
      ```text
      SESSION <sessionId> CMD CMD_NAME [arg1 arg2 ...]
@@ -182,6 +184,7 @@ Message req{MessageType::CommandRequest, "PING"};
   - **RM `<path>`**：删除普通文件
   - **RMDIR `<path>`**：删除空目录（不允许递归删除）
   - **LIST `[path]`**：列出目录下的项目，若不指定路径则默认为根目录 `/`
+  - CD <path>: 进入指定目录
 
 通过上述路由结构，后续可以很方便地增加新的业务命令：
 
@@ -208,25 +211,29 @@ Message req{MessageType::CommandRequest, "PING"};
   - 登录成功时，服务器会返回类似：
     - `SESSION sess-1-1 USER admin ROLE Admin`
   - 其中：
-    - `sess-1-1` 为会话 ID（Session ID），后续请求可在协议扩展后携带该 ID 进行权限控制；
+    - `sess-1-1` 为会话 ID（Session ID），后续请求在协议层会自动附带该 ID 进行权限控制（CLI 已内置，无需用户手动输入 `SESSION ...` 前缀）；
     - `USER` / `ROLE` 字段用于在客户端展示当前登录用户信息。
 
 - **文件系统相关示例**
+  - `LIST`：列出**当前目录**下的内容（初始为根目录 `/`）
+  - `CD <path>`：切换当前目录（仅在客户端维护），示例：
+    - `CD NEW`：从 `/` 进入 `/NEW`
+    - `CD /REVIEW`：直接进入 `/REVIEW`
   - `MKDIR /demo`：在根目录下创建 `demo` 目录
   - `WRITE /demo/hello.txt hello world`：创建/覆盖文件并写入 `"hello world"`
   - `READ /demo/hello.txt`：读取文件内容
-  - `LIST /`：列出根目录
-  - `LIST /demo`：列出 `demo` 目录下的内容
   - `RM /demo/hello.txt`：删除文件
   - `RMDIR /demo`：在目录为空时删除该目录
+  - `LIST /demo`：显式列出指定目录 `/demo` 的内容（覆盖当前目录）
+  - 目录项展示约定：
+    - 普通文件：直接显示文件名，例如 `hello.txt`
+    - 目录：在名称后追加 `/`，例如 `NEW/`、`REVIEW/`，便于与文件区分
 
 客户端日志中会打印发送的请求与收到的响应，便于调试与扩展协议时观察行为。
 
 ---
 
-## 下一步建议
-
-根据课程指导文档，可以在本骨架上逐步完善：
+## TODO:
 
 - 在当前阻塞式 TCP 的基础上，支持**多客户端并发**（如 `select`/`poll`/`epoll` 或多线程），并在统一命令路由的基础上扩展更丰富的业务命令；
 - 在 `fs::Vfs` 中进一步完善 superblock/inode 表/数据块管理、目录层次与路径解析；

@@ -1103,13 +1103,27 @@ std::optional<std::string> Vfs::listDirectory(const std::string& path)
     std::string result;
     for (const auto& e : entries)
     {
-        if (e.inodeId != 0)
+        if (e.inodeId == 0)
         {
-            if (!result.empty())
-            {
-                result.push_back('\n');
-            }
-            result += e.name;
+            continue;
+        }
+
+        Inode entryInode{};
+        if (!loadInode(e.inodeId, entryInode))
+        {
+            continue;
+        }
+
+        if (!result.empty())
+        {
+            result.push_back('\n');
+        }
+
+        // 约定：目录名后追加 '/'，便于客户端区分文件与目录。
+        result += e.name;
+        if (entryInode.isDirectory)
+        {
+            result.push_back('/');
         }
     }
 
