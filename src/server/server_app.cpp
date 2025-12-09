@@ -8,7 +8,14 @@ namespace osp::server
 ServerApp::ServerApp(std::uint16_t port)
     : port_(port)
     , vfs_(64) // 简单设置缓存容量
+    , auth_()
 {
+    // 初始化一些内置账号，便于本地测试与演示。
+    // 注意：密码为明文，仅用于教学示例。
+    auth_.addUser("admin", "admin", osp::Role::Admin);
+    auth_.addUser("author", "author", osp::Role::Author);
+    auth_.addUser("reviewer", "reviewer", osp::Role::Reviewer);
+    auth_.addUser("editor", "editor", osp::Role::Editor);
 }
 
 void ServerApp::run()
@@ -46,44 +53,132 @@ osp::protocol::Message ServerApp::handleRequest(const osp::protocol::Message& re
 {
     using osp::protocol::Message;
     using osp::protocol::MessageType;
-
-    osp::log(osp::LogLevel::Info, "Received request payload: " + req.payload);
+    using osp::protocol::Command;
 
     if (req.type != MessageType::CommandRequest)
     {
         return {MessageType::Error, "Unsupported message type"};
     }
 
-    std::istringstream iss(req.payload);
-    std::string cmd;
-    iss >> cmd;
+    osp::log(osp::LogLevel::Info, "Received request payload: " + req.payload);
 
-    if (cmd == "LIST_PAPERS")
+    Command cmd = osp::protocol::parseCommandPayload(req.payload);
+    if (cmd.name.empty())
     {
-        Message resp{MessageType::CommandResponse, "No papers yet."};
-        return resp;
+        return {MessageType::Error, "Empty command"};
     }
-    else if (cmd == "MKDIR")
+
+    // 如果携带了 Session 前缀，则在此统一校验会话是否有效
+    std::optional<osp::domain::Session> maybeSession;
+    if (!cmd.sessionId.empty())
     {
-        std::string path;
-        iss >> path;
-        if (path.empty())
+        auto s = auth_.validateSession(cmd.sessionId);
+        if (!s)
+        {
+            return {MessageType::Error, "Invalid or expired session"};
+        }
+        maybeSession = *s;
+    }
+
+    return handleCommand(cmd, maybeSession);
+}
+
+osp::protocol::Message ServerApp::handleCommand(const osp::protocol::Command&                        cmd,
+                                                const std::optional<osp::domain::Session>& maybeSession)
+{
+    using osp::protocol::Message;
+    using osp::protocol::MessageType;
+
+    // 预留：未来可以在这里增加鉴权 / 会话管理 / 日志审计等通用逻辑
+
+    if (cmd.name == "PING")
+    {
+        return {MessageType::CommandResponse, "PONG"};
+    }
+    if (cmd.name == "LOGIN")
+    {
+        // LOGIN <username> <password>
+        if (cmd.args.size() < 2)
+        {
+            return {MessageType::Error, "LOGIN: missing username or password"};
+        }
+
+        osp::Credentials cred;
+        cred.username = cmd.args[0];
+        cred.password = cmd.args[1];
+
+        auto session = auth_.login(cred);
+        if (!session)
+        {
+            return {MessageType::Error, "LOGIN failed: invalid credentials"};
+        }
+
+        // 简单文本响应：SESSION <id> USER <username> ROLE <role>
+        std::string roleStr;
+        switch (session->role)
+        {
+        case osp::Role::Author: roleStr = "Author"; break;
+        case osp::Role::Reviewer: roleStr = "Reviewer"; break;
+        case osp::Role::Editor: roleStr = "Editor"; break;
+        case osp::Role::Admin: roleStr = "Admin"; break;
+        }
+
+        std::string payload =
+            "SESSION " + session->id + " USER " + session->username + " ROLE " + roleStr;
+
+        return {MessageType::CommandResponse, payload};
+    }
+    if (cmd.name == "LIST_PAPERS")
+    {
+        return {MessageType::CommandResponse, "No papers yet."};
+    }
+
+    // 文件系统相关命令，统一通过 handleFsCommand 处理
+    if (cmd.name == "MKDIR" || cmd.name == "WRITE" || cmd.name == "READ" || cmd.name == "RM"
+        || cmd.name == "RMDIR" || cmd.name == "LIST")
+    {
+        return handleFsCommand(cmd, maybeSession);
+    }
+
+    return {MessageType::Error, "Unknown command: " + cmd.name};
+}
+
+osp::protocol::Message
+ServerApp::handleFsCommand(const osp::protocol::Command&                        cmd,
+                           const std::optional<osp::domain::Session>& /*maybeSession*/)
+{
+    using osp::protocol::Message;
+    using osp::protocol::MessageType;
+
+    if (cmd.name == "MKDIR")
+    {
+        if (cmd.args.empty())
         {
             return {MessageType::Error, "MKDIR: missing path"};
         }
+        const std::string& path = cmd.args[0];
 
         bool ok = vfs_.createDirectory(path);
         return ok ? Message{MessageType::CommandResponse, "MKDIR ok: " + path}
                   : Message{MessageType::Error, "MKDIR failed: " + path};
     }
-    else if (cmd == "WRITE")
+
+    if (cmd.name == "WRITE")
     {
-        std::string path;
+        // WRITE 命令需要保留路径之后的整行内容，因此使用 rawArgs 再次拆分
+        if (cmd.rawArgs.empty())
+        {
+            return {MessageType::Error, "WRITE: missing path"};
+        }
+
+        std::istringstream iss(cmd.rawArgs);
+        std::string         path;
         iss >> path;
         if (path.empty())
         {
             return {MessageType::Error, "WRITE: missing path"};
         }
+
         std::string content;
         std::getline(iss, content);
         if (!content.empty() && content.front() == ' ')
@@ -95,14 +190,14 @@ osp::protocol::Message ServerApp::handleRequest(const osp::protocol::Message& re
         return ok ? Message{MessageType::CommandResponse, "WRITE ok: " + path}
                   : Message{MessageType::Error, "WRITE failed: " + path};
     }
-    else if (cmd == "READ")
+
+    if (cmd.name == "READ")
     {
-        std::string path;
-        iss >> path;
-        if (path.empty())
+        if (cmd.args.empty())
         {
             return {MessageType::Error, "READ: missing path"};
         }
+        const std::string& path = cmd.args[0];
 
         auto data = vfs_.readFile(path);
         if (!data)
@@ -111,39 +206,39 @@ osp::protocol::Message ServerApp::handleRequest(const osp::protocol::Message& re
         }
         return {MessageType::CommandResponse, *data};
     }
-    else if (cmd == "RM")
+
+    if (cmd.name == "RM")
     {
-        std::string path;
-        iss >> path;
-        if (path.empty())
+        if (cmd.args.empty())
         {
             return {MessageType::Error, "RM: missing path"};
         }
+        const std::string& path = cmd.args[0];
 
         bool ok = vfs_.removeFile(path);
         return ok ? Message{MessageType::CommandResponse, "RM ok: " + path}
                   : Message{MessageType::Error, "RM failed: " + path};
     }
-    else if (cmd == "RMDIR")
+
+    if (cmd.name == "RMDIR")
     {
-        std::string path;
-        iss >> path;
-        if (path.empty())
+        if (cmd.args.empty())
         {
             return {MessageType::Error, "RMDIR: missing path"};
         }
+        const std::string& path = cmd.args[0];
 
         bool ok = vfs_.removeDirectory(path);
         return ok ? Message{MessageType::CommandResponse, "RMDIR ok: " + path}
                   : Message{MessageType::Error, "RMDIR failed (maybe not empty?): " + path};
     }
-    else if (cmd == "LIST")
+
+    if (cmd.name == "LIST")
     {
-        std::string path;
-        iss >> path;
-        if (path.empty())
+        std::string path = "/";
+        if (!cmd.args.empty())
         {
-            path = "/";
+            path = cmd.args[0];
         }
 
         auto listing = vfs_.listDirectory(path);
@@ -154,7 +249,7 @@ osp::protocol::Message ServerApp::handleRequest(const osp::protocol::Message& re
         return {MessageType::CommandResponse, *listing};
     }
 
-    return {MessageType::Error, "Unknown command: " + cmd};
+    return {MessageType::Error, "Unknown FS command: " + cmd.name};
 }
 
 } // namespace osp::server

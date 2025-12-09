@@ -11,6 +11,10 @@ add_library(osproj_domain
     domain/roles.hpp
     domain/paper.hpp
     domain/review.hpp
+    domain/permissions.hpp
+    domain/permissions.cpp
+    domain/auth.hpp
+    domain/auth.cpp
 )
 
 target_link_libraries(osproj_domain
