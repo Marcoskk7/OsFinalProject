@@ -32,6 +32,9 @@ private:
     void handleLoginResponse(const std::string& requestLine,
                              const osp::protocol::Message& resp);
 
+    // 根据角色打印对应的操作指引
+    void printHelpForRole(const std::string& role) const;
+
 private:
     std::string    host_;
     unsigned short port_{};

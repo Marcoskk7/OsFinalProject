@@ -37,6 +37,9 @@ public:
     // 尝试使用凭证登录，成功则返回新的 Session（并记录在服务内部），失败返回 std::nullopt。
     std::optional<Session> login(const osp::Credentials& credentials);
 
+    // 根据用户名查找用户 ID（用于分配审稿人等场景）
+    std::optional<UserId> getUserId(const std::string& username) const;
+
     // 根据会话 ID 查找已有 Session，用于后续请求的鉴权。
     std::optional<Session> validateSession(const std::string& sessionId) const;
 
