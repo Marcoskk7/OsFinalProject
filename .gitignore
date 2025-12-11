@@ -72,4 +72,15 @@ cmake-build-*/
 .DS_Store
 Thumbs.db
 
+############################
+# Node / Web assets
+############################
+
+node_modules/
+gateway/node_modules/
+web/node_modules/
+npm-debug.log*
+pnpm-debug.log*
+yarn-error.log*
+
 

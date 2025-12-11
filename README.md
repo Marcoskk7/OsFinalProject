@@ -71,13 +71,13 @@ cmake --build . --target clean
 1. **启动服务器**
 
 ```bash
-./osproj_server
+./build/src/osproj_server
 ```
 
 2. **启动客户端并输入命令**
 
 ```bash
-./osproj_client
+./build/src/osproj_client
 ```
 
 客户端启动后，会进入一个简单的 REPL 循环，提示符为 `> `，可以直接输入命令并回车发送到服务器；输入 `quit`/`exit` 退出客户端。
