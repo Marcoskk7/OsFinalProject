@@ -1,0 +1,852 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>OS Project UI</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+      :root {
+        --primary: #6366f1;
+        --primary-dark: #4f46e5;
+        --primary-light: #818cf8;
+        --success: #10b981;
+        --warning: #f59e0b;
+        --danger: #ef4444;
+        --background: linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%);
+        --card-bg: rgba(255, 255, 255, 0.95);
+        --text-primary: #1e293b;
+        --text-secondary: #64748b;
+        --border: rgba(99, 102, 241, 0.2);
+        --shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1);
+        --radius: 14px;
+        --transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        padding: 20px;
+        background: var(--background);
+        color: var(--text-primary);
+        overflow-x: hidden;
+      }
+
+      /* Animated background elements */
+      .bg-element {
+        position: fixed;
+        border-radius: 50%;
+        z-index: -1;
+        opacity: 0.15;
+        filter: blur(40px);
+      }
+      .bg-1 {
+        width: 300px;
+        height: 300px;
+        background: var(--primary);
+        top: -150px;
+        right: -150px;
+      }
+      .bg-2 {
+        width: 400px;
+        height: 400px;
+        background: var(--success);
+        bottom: -200px;
+        left: -200px;
+      }
+
+      .card {
+        width: min(1000px, 100%);
+        background: var(--card-bg);
+        border-radius: var(--radius);
+        padding: 32px;
+        box-shadow: var(--shadow);
+        border: 1px solid var(--border);
+        backdrop-filter: blur(10px);
+        position: relative;
+        overflow: hidden;
+      }
+
+      .card::before {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        height: 4px;
+        background: linear-gradient(90deg, var(--primary), var(--success));
+      }
+
+      .header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 24px;
+        padding-bottom: 16px;
+        border-bottom: 1px solid var(--border);
+      }
+
+      h1 {
+        margin: 0;
+        font-size: 28px;
+        font-weight: 700;
+        background: linear-gradient(90deg, var(--primary), var(--primary-dark));
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        letter-spacing: -0.5px;
+      }
+
+      .tag {
+        background: rgba(99, 102, 241, 0.1);
+        color: var(--primary);
+        padding: 4px 12px;
+        border-radius: 20px;
+        font-size: 12px;
+        font-weight: 600;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+
+      .tag-stack {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        align-items: flex-end;
+      }
+
+      .tag.user-tag {
+        background: rgba(16, 185, 129, 0.12);
+        color: var(--success);
+        border: 1px solid rgba(16, 185, 129, 0.2);
+      }
+
+      .subtitle {
+        color: var(--text-secondary);
+        font-size: 15px;
+        margin: 0 0 32px;
+        line-height: 1.5;
+      }
+
+      .section {
+        margin-bottom: 28px;
+      }
+
+      .section-header {
+        display: flex;
+        align-items: center;
+        margin-bottom: 12px;
+        gap: 10px;
+      }
+
+      .label {
+        font-weight: 600;
+        color: var(--text-primary);
+        font-size: 16px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .label i {
+        color: var(--primary);
+        font-size: 14px;
+      }
+
+      .status-indicator {
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        background: var(--success);
+        display: inline-block;
+        margin-left: 8px;
+        animation: pulse 2s infinite;
+      }
+
+      @keyframes pulse {
+        0% { opacity: 1; }
+        50% { opacity: 0.5; }
+        100% { opacity: 1; }
+      }
+
+      .row {
+        display: flex;
+        gap: 12px;
+        flex-wrap: wrap;
+        align-items: stretch;
+      }
+
+      input, textarea, button {
+        font-family: inherit;
+        font-size: 15px;
+        transition: var(--transition);
+      }
+
+      input, textarea {
+        background: #f8fafc;
+        color: var(--text-primary);
+        border: 1.5px solid #e2e8f0;
+        border-radius: 10px;
+        padding: 12px 16px;
+        outline: none;
+        flex: 1;
+        min-width: 0; /* 重要：允许flex项收缩 */
+      }
+
+      input:focus, textarea:focus {
+        border-color: var(--primary);
+        box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.2);
+        background: white;
+      }
+
+      input:disabled, textarea:disabled {
+        background: #e2e8f0;
+        color: #94a3b8;
+        cursor: not-allowed;
+      }
+
+      .input-with-icon {
+        position: relative;
+        flex: 1;
+        min-width: 200px;
+      }
+
+      .input-with-icon i {
+        position: absolute;
+        left: 16px;
+        top: 50%;
+        transform: translateY(-50%);
+        color: var(--text-secondary);
+        pointer-events: none;
+      }
+
+      .input-with-icon input {
+        width: 100%;
+        padding-left: 42px;
+        box-sizing: border-box;
+      }
+
+      button {
+        background: linear-gradient(135deg, var(--primary), var(--primary-dark));
+        color: white;
+        font-weight: 600;
+        border: none;
+        border-radius: 10px;
+        padding: 12px 20px;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        white-space: nowrap;
+        box-shadow: 0 4px 12px rgba(99, 102, 241, 0.3);
+        flex-shrink: 0; /* 防止按钮被压缩 */
+        height: 46px; /* 与输入框高度一致 */
+      }
+
+      button:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 6px 16px rgba(99, 102, 241, 0.4);
+      }
+
+      button:active {
+        transform: translateY(0);
+      }
+
+      button.success {
+        background: linear-gradient(135deg, var(--success), #059669);
+      }
+
+      button.warning {
+        background: linear-gradient(135deg, var(--warning), #d97706);
+      }
+
+      button.danger {
+        background: linear-gradient(135deg, var(--danger), #dc2626);
+      }
+
+      button.secondary {
+        background: rgba(0, 0, 0, 0.08);
+        color: var(--text-primary);
+        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08);
+      }
+
+      button i {
+        font-size: 14px;
+      }
+
+      #output {
+        background: #1e293b;
+        color: #e2e8f0;
+        border-radius: 10px;
+        padding: 20px;
+        font-family: 'JetBrains Mono', 'Fira Code', Consolas, monospace;
+        font-size: 14px;
+        line-height: 1.6;
+        white-space: pre-wrap;
+        word-break: break-word;
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        min-height: 200px;
+        max-height: 400px;
+        overflow-y: auto;
+        margin: 0;
+        box-sizing: border-box;
+      }
+
+      #output::before {
+        content: '> ';
+        color: var(--success);
+        font-weight: bold;
+      }
+
+      .output-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 10px;
+      }
+
+      .copy-btn {
+        background: rgba(99, 102, 241, 0.12);
+        color: var(--primary-dark);
+        border: 1px solid rgba(99, 102, 241, 0.3);
+        padding: 6px 12px;
+        font-size: 12px;
+        border-radius: 6px;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        gap: 5px;
+        flex-shrink: 0;
+      }
+
+      .copy-btn:hover {
+        background: rgba(99, 102, 241, 0.18);
+      }
+
+      .quick-commands {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        margin-top: 12px;
+        flex-wrap: wrap;
+      }
+
+      .quick-commands span {
+        font-size: 13px;
+        color: var(--text-secondary);
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+
+      .quick-command {
+        background: rgba(99, 102, 241, 0.1);
+        color: var(--primary);
+        border: 1px solid rgba(99, 102, 241, 0.2);
+        border-radius: 6px;
+        padding: 4px 10px;
+        font-size: 12px;
+        cursor: pointer;
+        transition: var(--transition);
+      }
+
+      .quick-command:hover {
+        background: rgba(99, 102, 241, 0.2);
+      }
+
+      .notification {
+        position: fixed;
+        top: 24px;
+        right: 24px;
+        background: white;
+        padding: 16px 20px;
+        border-radius: 10px;
+        box-shadow: 0 10px 25px rgba(0, 0, 0, 0.1);
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        z-index: 1000;
+        transform: translateX(150%);
+        transition: transform 0.4s cubic-bezier(0.68, -0.55, 0.265, 1.55);
+        border-left: 4px solid var(--primary);
+      }
+
+      .notification.show {
+        transform: translateX(0);
+      }
+
+      .notification i {
+        color: var(--primary);
+        font-size: 20px;
+      }
+
+      .notification p {
+        margin: 0;
+        font-weight: 500;
+      }
+
+      /* 响应式布局修复 */
+      @media (min-width: 769px) {
+        .row {
+          flex-wrap: nowrap;
+        }
+        
+        .input-with-icon {
+          min-width: 0;
+        }
+        
+        /* 为不同部分设置不同的flex比例 */
+        .section:nth-child(2) .row .input-with-icon {
+          flex: 2;
+        }
+        
+        .section:nth-child(2) .row button {
+          flex: 1;
+        }
+        
+        .section:nth-child(3) .row .input-with-icon {
+          flex: 3;
+        }
+        
+        .section:nth-child(3) .row button {
+          flex: 1;
+        }
+        
+        .section:nth-child(4) .row .input-with-icon {
+          flex: 4;
+        }
+        
+        .section:nth-child(4) .row button {
+          flex: 1;
+        }
+      }
+
+      @media (max-width: 768px) {
+        .card {
+          padding: 24px 20px;
+        }
+        
+        .row {
+          flex-direction: column;
+          align-items: stretch;
+        }
+        
+        input, textarea, .input-with-icon, button {
+          width: 100%;
+          min-width: 100%;
+          box-sizing: border-box;
+        }
+        
+        h1 {
+          font-size: 24px;
+        }
+        
+        .header {
+          flex-direction: column;
+          align-items: flex-start;
+          gap: 12px;
+        }
+        
+        .tag {
+          align-self: flex-start;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <!-- Background elements -->
+    <div class="bg-element bg-1"></div>
+    <div class="bg-element bg-2"></div>
+
+    <!-- Notification -->
+    <div class="notification" id="notification">
+      <i class="fas fa-check-circle"></i>
+      <p id="notification-text">Operation completed successfully</p>
+    </div>
+
+    <div class="card">
+      <div class="header">
+        <div>
+          <h1>OS Project Control Panel</h1>
+          <p class="subtitle">Academic review demo • TCP bridged via HTTP • <span class="status-indicator"></span> System operational</p>
+        </div>
+        <div class="tag-stack">
+          <div class="tag">
+            <i class="fas fa-shield-alt"></i>
+            Secure Session
+          </div>
+          <div class="tag user-tag">
+            <i class="fas fa-user-circle"></i>
+            <span id="current-user">Not logged in</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-header">
+          <div class="label">
+            <i class="fas fa-server"></i>
+            Server Status
+          </div>
+        </div>
+        <div class="row">
+          <button id="ping" class="success">
+            <i class="fas fa-satellite-dish"></i>
+            Ping Server
+          </button>
+          <button id="health" class="warning">
+            <i class="fas fa-heartbeat"></i>
+            Health Check
+          </button>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-header">
+          <div class="label">
+            <i class="fas fa-user-lock"></i>
+            Authentication
+          </div>
+        </div>
+        <div class="row">
+          <div class="input-with-icon">
+            <i class="fas fa-user"></i>
+            <input id="username" value="admin" placeholder="Username" />
+          </div>
+          <div class="input-with-icon">
+            <i class="fas fa-key"></i>
+            <input id="password" type="password" value="admin" placeholder="Password" />
+          </div>
+          <button id="login">
+            <i class="fas fa-sign-in-alt"></i>
+            Login
+          </button>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-header">
+          <div class="label">
+            <i class="fas fa-id-card"></i>
+            Session Management
+          </div>
+        </div>
+        <div class="row">
+          <div class="input-with-icon">
+            <i class="fas fa-hashtag"></i>
+            <input id="session" placeholder="Session ID (auto-filled after login)" />
+          </div>
+          <button id="refresh-session" class="warning">
+            <i class="fas fa-sync-alt"></i>
+            Refresh
+          </button>
+          <button id="clear-session" class="danger">
+            <i class="fas fa-trash-alt"></i>
+            Clear
+          </button>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-header">
+          <div class="label">
+            <i class="fas fa-terminal"></i>
+            Command Interface
+          </div>
+        </div>
+        <div class="row">
+          <div class="input-with-icon">
+            <i class="fas fa-code"></i>
+            <input id="command" value="PING" placeholder="Enter command (e.g. LIST /, PING, LIST_PAPERS)" />
+          </div>
+          <button id="send">
+            <i class="fas fa-paper-plane"></i>
+            Execute
+          </button>
+          <button id="clear-command" class="secondary">
+            <i class="fas fa-eraser"></i>
+            Clear
+          </button>
+        </div>
+        <div class="quick-commands">
+          <span><i class="fas fa-lightbulb"></i> Quick commands:</span>
+          <button class="quick-command" data-command="PING">PING</button>
+          <button class="quick-command" data-command="LIST /">LIST</button>
+          <button class="quick-command" data-command="LIST_PAPERS">LIST_PAPERS</button>
+          <button class="quick-command" data-command="MKDIR /demo">MKDIR /demo</button>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="output-header">
+          <div class="label">
+            <i class="fas fa-terminal"></i>
+            Output Console
+          </div>
+          <button class="copy-btn" id="copy-output">
+            <i class="fas fa-copy" aria-hidden="true"></i>
+            <span>Copy</span>
+          </button>
+        </div>
+        <pre id="output">OS Project Control Panel v1.0
+> System initialized
+> Ready for commands...</pre>
+      </div>
+    </div>
+
+    <script>
+      const $ = (sel) => document.querySelector(sel);
+      const $$ = (sel) => document.querySelectorAll(sel);
+
+      // Notification system
+      const notification = $('#notification');
+      const notificationText = $('#notification-text');
+      const currentUserLabel = $('#current-user');
+      const loginBtn = $('#login');
+      const usernameInput = $('#username');
+      const passwordInput = $('#password');
+      let loggedInUser = '';
+      
+      const showNotification = (message, type = 'success') => {
+        const icons = {
+          success: 'fa-check-circle',
+          error: 'fa-exclamation-circle',
+          warning: 'fa-exclamation-triangle',
+          info: 'fa-info-circle'
+        };
+        
+        notification.querySelector('i').className = `fas ${icons[type]}`;
+        notificationText.textContent = message;
+        notification.style.borderLeftColor = getComputedStyle(document.documentElement)
+          .getPropertyValue(`--${type}`).trim();
+        
+        notification.classList.add('show');
+        setTimeout(() => {
+          notification.classList.remove('show');
+        }, 3000);
+      };
+
+      // Enhanced output with timestamp and coloring
+      const setOutput = (text, type = 'info') => {
+        const output = $('#output');
+        const timestamp = new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit', second:'2-digit'});
+        const prefix = type === 'error' ? '[ERROR]' : type === 'success' ? '[SUCCESS]' : '[INFO]';
+        
+        let color = '#e2e8f0';
+        if (type === 'error') color = '#fca5a5';
+        if (type === 'success') color = '#86efac';
+        if (type === 'warning') color = '#fcd34d';
+        
+        const newLine = `${prefix} ${timestamp}\n${text}\n\n`;
+        output.innerHTML = `<span style="color:${color}">${newLine}</span>` + output.innerHTML;
+        
+        // Limit output length
+        const lines = output.innerHTML.split('\n');
+        if (lines.length > 50) {
+          output.innerHTML = lines.slice(0, 50).join('\n');
+        }
+      };
+
+      // API wrapper with error handling
+      const api = async (path, body) => {
+        try {
+          const res = await fetch(path, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body || {}),
+          });
+          
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          return await res.json();
+        } catch (error) {
+          setOutput(`API Error: ${error.message}`, 'error');
+          showNotification('Connection failed', 'error');
+          return { ok: false, error: error.message };
+        }
+      };
+
+      // Form data getter
+      const getForm = () => ({
+        username: $('#username').value,
+        password: $('#password').value,
+        sessionId: $('#session').value.trim(),
+        command: $('#command').value,
+      });
+
+      // Set session ID with visual feedback
+      const setSession = (id) => {
+        const sessionInput = $('#session');
+        sessionInput.value = id;
+        
+        if (id) {
+          sessionInput.style.borderColor = 'var(--success)';
+          sessionInput.style.boxShadow = '0 0 0 3px rgba(16, 185, 129, 0.2)';
+          setTimeout(() => {
+            sessionInput.style.borderColor = '';
+            sessionInput.style.boxShadow = '';
+          }, 2000);
+          showNotification('Session ID updated', 'success');
+        }
+      };
+
+      const setLoginState = (isLoggedIn, username = '') => {
+        loggedInUser = isLoggedIn ? username : '';
+        currentUserLabel.textContent = isLoggedIn ? username : 'Not logged in';
+        loginBtn.classList.remove('danger');
+        loginBtn.textContent = isLoggedIn ? 'Logout' : 'Login';
+        if (isLoggedIn) {
+          loginBtn.classList.add('danger');
+          loginBtn.innerHTML = '<i class="fas fa-sign-out-alt"></i> Logout';
+          usernameInput.disabled = true;
+          passwordInput.disabled = true;
+        } else {
+          loginBtn.innerHTML = '<i class="fas fa-sign-in-alt"></i> Login';
+          usernameInput.disabled = false;
+          passwordInput.disabled = false;
+        }
+      };
+
+      // Ping handler
+      const handlePing = async () => {
+        setOutput('Pinging server...', 'info');
+        const r = await api('/api/ping');
+        if (r.ok) {
+          setOutput(`Server response: ${JSON.stringify(r, null, 2)}`, 'success');
+          showNotification('Server is responsive', 'success');
+        }
+      };
+
+      // Health check handler
+      const handleHealth = async () => {
+        setOutput('Performing health check...', 'info');
+        const r = await api('/api/health');
+        if (r.ok) {
+          setOutput(`Health status: ${JSON.stringify(r, null, 2)}`, 'success');
+          showNotification('System health: OK', 'success');
+        }
+      };
+
+      // Login handler
+      const handleLogin = async () => {
+        if (loggedInUser) {
+          setOutput(`Logged out user ${loggedInUser}`, 'info');
+          setSession('');
+          setLoginState(false);
+          showNotification('Logged out', 'info');
+          return;
+        }
+
+        const { username, password } = getForm();
+        if (!username || !password) {
+          setOutput('Please enter both username and password', 'error');
+          showNotification('Missing credentials', 'error');
+          return;
+        }
+        
+        setOutput(`Attempting login as ${username}...`, 'info');
+        const r = await api('/api/login', { username, password });
+        
+        if (r.ok && typeof r.payload === 'string') {
+          setOutput(`Login successful: ${r.payload}`, 'success');
+          const m = r.payload.match(/SESSION\s+(\S+)/i);
+          if (m) setSession(m[1]);
+          setLoginState(true, username);
+          showNotification('Login successful', 'success');
+        } else {
+          setOutput(`Login failed: ${JSON.stringify(r, null, 2)}`, 'error');
+          showNotification('Login failed', 'error');
+        }
+      };
+
+      // Command handler
+      const handleCommand = async () => {
+        const { command, sessionId } = getForm();
+        if (!command.trim()) {
+          setOutput('Please enter a command', 'error');
+          showNotification('No command entered', 'error');
+          return;
+        }
+        
+        setOutput(`Executing: ${command}`, 'info');
+        const r = await api('/api/command', { 
+          command, 
+          sessionId: sessionId || undefined 
+        });
+        
+        if (r.ok) {
+          setOutput(`Response: ${JSON.stringify(r, null, 2)}`, 'success');
+          showNotification('Command executed', 'success');
+        } else {
+          setOutput(`Error: ${JSON.stringify(r, null, 2)}`, 'error');
+        }
+      };
+
+      // Copy output to clipboard
+      $('#copy-output').addEventListener('click', () => {
+        const outputText = $('#output').textContent;
+        navigator.clipboard.writeText(outputText).then(() => {
+          showNotification('Output copied to clipboard', 'success');
+        });
+      });
+
+      // Clear session
+      $('#clear-session').addEventListener('click', () => {
+        $('#session').value = '';
+        setOutput('Session cleared', 'warning');
+        showNotification('Session cleared', 'warning');
+      });
+
+      // Clear command
+      $('#clear-command').addEventListener('click', () => {
+        $('#command').value = '';
+        $('#command').focus();
+      });
+
+      // Refresh session
+      $('#refresh-session').addEventListener('click', () => {
+        const sessionId = $('#session').value;
+        if (sessionId) {
+          setOutput(`Refreshing session ${sessionId}...`, 'info');
+          showNotification('Session refresh requested', 'info');
+        } else {
+          setOutput('No active session to refresh', 'warning');
+        }
+      });
+
+      // Quick command buttons
+      $$('.quick-command').forEach(btn => {
+        btn.addEventListener('click', () => {
+          $('#command').value = btn.dataset.command;
+          $('#command').focus();
+        });
+      });
+
+      // Enter key support for command input
+      $('#command').addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') handleCommand();
+      });
+
+      // Initialize
+      window.addEventListener('DOMContentLoaded', () => {
+        $('#ping').addEventListener('click', handlePing);
+        $('#health').addEventListener('click', handleHealth);
+        $('#login').addEventListener('click', handleLogin);
+        $('#send').addEventListener('click', handleCommand);
+        setLoginState(false);
+        
+        // Focus on command input
+        $('#command').focus();
+        
+        // Show welcome notification
+        setTimeout(() => {
+          showNotification('Control panel initialized and ready', 'success');
+        }, 1000);
+      });
+    </script>
+  </body>
+</html>
