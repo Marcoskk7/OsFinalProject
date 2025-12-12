@@ -82,7 +82,14 @@ cmake --build . --target clean
 
 客户端启动后，会进入一个简单的 REPL 循环，提示符为 `> `，可以直接输入命令并回车发送到服务器；输入 `quit`/`exit` 退出客户端。
 
+3. **如果需要启动前端**
+先安装nodejs和npm
 
+```bash
+npm install
+cd ./gateway
+node server.js
+```
 ---
 
 ## 统一协议与命令路由说明
