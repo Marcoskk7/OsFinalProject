@@ -38,6 +38,14 @@ private:
     handleFsCommand(const osp::protocol::Command&                        cmd,
                     const std::optional<osp::domain::Session>& maybeSession);
 
+    // 论文管理相关命令
+    osp::protocol::Message
+    handlePaperCommand(const osp::protocol::Command&                        cmd,
+                       const std::optional<osp::domain::Session>& maybeSession);
+
+    // 辅助函数：获取并自增下一个 Paper ID
+    std::uint32_t nextPaperId();
+
     std::uint16_t          port_{};
     std::atomic<bool>      running_{false};
     fs::Vfs                vfs_;

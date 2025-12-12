@@ -258,6 +258,66 @@ void Cli::handleLoginResponse(const std::string&               requestLine,
     sessionId_ = newId;
     osp::log(osp::LogLevel::Info, "Updated session id from LOGIN '" + requestLine
                                       + "': " + sessionId_);
+
+    // 解析角色并打印帮助信息
+    // 格式: SESSION <id> USER <username> ROLE <RoleName>
+    constexpr const char* kRolePrefix = " ROLE ";
+    auto rolePos = p.find(kRolePrefix);
+    if (rolePos != std::string::npos)
+    {
+        std::string role = p.substr(rolePos + std::char_traits<char>::length(kRolePrefix));
+        // 去除可能存在的尾部空白
+        while (!role.empty() && std::isspace(role.back()))
+        {
+            role.pop_back();
+        }
+        printHelpForRole(role);
+    }
+}
+
+void Cli::printHelpForRole(const std::string& role) const
+{
+    std::cout << "\n==================================================\n";
+    std::cout << " Login Successful! Welcome, " << role << ".\n";
+    std::cout << "==================================================\n";
+    std::cout << "Available commands for your role:\n\n";
+
+    if (role == "Author")
+    {
+        std::cout << "  SUBMIT <Title> <Content...>  - Upload a new paper\n";
+        std::cout << "                                 Example: SUBMIT MyPaper This is the content\n";
+        std::cout << "  LIST_PAPERS                  - List your submitted papers\n";
+        std::cout << "  GET_PAPER <PaperID>          - View paper details\n";
+    }
+    else if (role == "Reviewer")
+    {
+        std::cout << "  LIST_PAPERS                  - List assigned papers\n";
+        std::cout << "  GET_PAPER <PaperID>          - View paper details\n";
+        std::cout << "  REVIEW <PaperID> <Decision> <Comments...>\n";
+        std::cout << "                                 Decisions: ACCEPT, REJECT, MINOR, MAJOR\n";
+    }
+    else if (role == "Editor")
+    {
+        std::cout << "  LIST_PAPERS                  - List all papers\n";
+        std::cout << "  GET_PAPER <PaperID>          - View paper details\n";
+        std::cout << "  ASSIGN <PaperID> <User>      - Assign a reviewer to a paper\n";
+        std::cout << "  LIST_REVIEWS <PaperID>       - View all reviews for a paper\n";
+        std::cout << "  DECISION <PaperID> <Result>  - Make final decision (ACCEPT/REJECT)\n";
+    }
+    else if (role == "Admin")
+    {
+        std::cout << "  MKDIR <Path>                 - Create directory\n";
+        std::cout << "  LIST <Path>                  - List directory\n";
+        std::cout << "  WRITE <Path> <Content>       - Write file\n";
+        std::cout << "  READ <Path>                  - Read file\n";
+        std::cout << "  RM <Path>                    - Remove file\n";
+    }
+
+    std::cout << "\nGeneral Commands:\n";
+    std::cout << "  PING                         - Test connection\n";
+    std::cout << "  CD <Path>                    - Change current directory\n";
+    std::cout << "  quit                         - Exit client\n";
+    std::cout << "==================================================\n\n";
 }
 
 } // namespace osp::client
