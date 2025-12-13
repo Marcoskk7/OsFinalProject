@@ -38,6 +38,14 @@ private:
     // 登录成功后，基于当前角色打印可用命令提示。
     void printRoleGuide() const;
 
+    // 处理作者数字菜单的输入与多步流程。
+    bool handleAuthorMenuInput(const std::string& line);
+    void printAuthorNumericMenu() const;
+
+    // 处理审稿人数字菜单的输入与多步流程。
+    bool handleReviewerMenuInput(const std::string& line);
+    void printReviewerNumericMenu() const;
+
     // 处理管理员数字菜单的输入与多步流程。
     bool handleAdminMenuInput(const std::string& line);
     void printAdminNumericMenu() const;
@@ -53,6 +61,34 @@ private:
     std::string    currentUser_;        // 当前登录用户名
     std::string    currentRole_;        // 当前登录角色（Admin / Editor / ...）
     std::string    currentPath_ = "/";  // 客户端维护的“当前目录”（仅影响默认 LIST 等命令）
+
+    // 作者数字菜单的临时状态
+    enum class AuthorWizard
+    {
+        None,
+        SubmitAskTitle,
+        SubmitAskContent,
+        ViewAskPaperId,
+        ViewReviewsAskPaperId,
+        PostSubmitPrompt,
+        PostViewPrompt,
+        PostViewReviewsPrompt
+    };
+    AuthorWizard authorWizard_ = AuthorWizard::None;
+    std::string  tempTitle_;
+
+    // 审稿人数字菜单的临时状态
+    enum class ReviewerWizard
+    {
+        None,
+        ViewAskPaperId,
+        ReviewAskPaperId,
+        ReviewAskDecision,
+        ReviewAskComments,
+        PostViewPrompt,
+        PostReviewPrompt
+    };
+    ReviewerWizard reviewerWizard_ = ReviewerWizard::None;
 
     // 管理员数字菜单的临时状态
     enum class AdminWizard

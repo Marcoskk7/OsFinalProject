@@ -116,8 +116,23 @@ void Cli::run()
             continue;
         }
 
+        // 作者/审稿人/管理员/编辑：数字菜单 / 向导处理（优先于普通命令）
+        if (currentRole_ == "Author")
+        {
+            if (handleAuthorMenuInput(line))
+            {
+                continue;
+            }
+        }
+        else if (currentRole_ == "Reviewer")
+        {
+            if (handleReviewerMenuInput(line))
+            {
+                continue;
+            }
+        }
         // 管理员数字菜单 / 向导处理（优先于普通命令）
-        if (currentRole_ == "Admin")
+        else if (currentRole_ == "Admin")
         {
             if (handleAdminMenuInput(line))
             {
@@ -307,8 +322,13 @@ void Cli::handleLoginResponse(const std::string&               requestLine,
 void Cli::printGeneralGuide() const
 {
     std::cout << "=== 指引 ===\n";
-    std::cout << "基础：PING（连通性），LOGIN <user> <pass>，quit/exit 退出\n";
-    std::cout << "文件：LIST [path] | MKDIR <path> | WRITE <path> <content> | READ <path> | RM <path> | RMDIR <path> | CD <path>\n";
+    std::cout << "基础命令:\n";
+    std::cout << "  PING                      - 连通性测试\n";
+    std::cout << "  LOGIN <user> <pass>       - 登录\n";
+    std::cout << "  ROLE_HELP                 - 查看当前角色可用命令/菜单\n";
+    std::cout << "  quit/exit                 - 退出客户端\n";
+    std::cout << "文件系统命令:\n";
+    std::cout << "  LIST [path] | MKDIR <path> | WRITE <path> <content> | READ <path> | RM <path> | RMDIR <path> | CD <path>\n";
     std::cout << "内置账号（用户名=密码）：admin / author / reviewer / editor\n";
     std::cout << "----------------\n";
 }
@@ -329,54 +349,397 @@ void Cli::printRoleGuide() const
 
     if (currentRole_ == "Author")
     {
-        std::cout << "[Author 可用命令]\n";
-        std::cout << "  SUBMIT <Title> <Content...>  - 上传新论文\n";
-        std::cout << "  LIST_PAPERS                  - 查看自己提交的论文\n";
-        std::cout << "  GET_PAPER <PaperID>          - 查看论文详情\n";
+        std::cout << "=== Author 指引 ===\n";
+        std::cout << "命令:\n";
+        std::cout << "  SUBMIT <Title> <Content...>           - 上传新论文\n";
+        std::cout << "    Title: 不含空格（建议用下划线代替）\n";
+        std::cout << "  LIST_PAPERS                           - 查看我的论文列表\n";
+        std::cout << "  GET_PAPER <PaperID>                   - 查看论文详情（含正文）\n";
+        std::cout << "  LIST_REVIEWS <PaperID>                - 查看评审意见/状态（仅限自己的论文）\n";
+        printAuthorNumericMenu();
+        return;
     }
     else if (currentRole_ == "Reviewer")
     {
-        std::cout << "[Reviewer 可用命令]\n";
-        std::cout << "  LIST_PAPERS                  - 查看分配给自己的论文\n";
-        std::cout << "  GET_PAPER <PaperID>          - 查看论文详情\n";
-        std::cout << "  REVIEW <PaperID> <Decision> <Comments...>\n";
-        std::cout << "                                 Decision: ACCEPT / REJECT / MINOR / MAJOR\n";
+        std::cout << "=== Reviewer 指引 ===\n";
+        std::cout << "命令:\n";
+        std::cout << "  LIST_PAPERS                               - 查看分配给我的论文列表\n";
+        std::cout << "  GET_PAPER <PaperID>                       - 查看论文详情（仅限被分配的论文）\n";
+        std::cout << "  REVIEW <PaperID> <Decision> <Comments...> - 提交评审报告\n";
+        std::cout << "    Decision: ACCEPT | REJECT | MINOR | MAJOR\n";
+        std::cout << "    Comments: 必填，可包含空格\n";
+        printReviewerNumericMenu();
+        return;
     }
     else if (currentRole_ == "Editor")
     {
-        std::cout << "[Editor 可用命令]\n";
-        std::cout << "  LIST_PAPERS                  - 查看所有论文\n";
-        std::cout << "  GET_PAPER <PaperID>          - 查看论文详情\n";
-        std::cout << "  ASSIGN <PaperID> <User>      - 分配审稿人\n";
-        std::cout << "  LIST_REVIEWS <PaperID>       - 查看论文所有评审\n";
-        std::cout << "  DECISION <PaperID> <Result>  - 最终接收/拒稿 (ACCEPT/REJECT)\n";
-        std::cout << "  （也可使用数字向导：见下）\n";
+        std::cout << "=== Editor 指引 ===\n";
+        std::cout << "命令:\n";
+        std::cout << "  LIST_PAPERS                          - 查看所有论文\n";
+        std::cout << "  GET_PAPER <PaperID>                  - 查看论文详情\n";
+        std::cout << "  ASSIGN <PaperID> <User>              - 分配审稿人\n";
+        std::cout << "  LIST_REVIEWS <PaperID>               - 查看论文所有评审\n";
+        std::cout << "  DECISION <PaperID> <Result>          - 最终接收/拒稿\n";
+        std::cout << "    Result: ACCEPT | REJECT\n";
         printEditorNumericMenu();
+        return;
     }
     else if (currentRole_ == "Admin")
     {
-        std::cout << "[Admin 可用命令]\n";
+        std::cout << "=== Admin 指引 ===\n";
+        std::cout << "命令:\n";
         std::cout << "  MKDIR / LIST / WRITE / READ / RM / RMDIR  - 文件管理\n";
-        std::cout << "  MANAGE_USERS LIST | ADD <u> <p> <Role> | UPDATE_ROLE <u> <Role>\n";
-        std::cout << "               | REMOVE <u> | RESET_PASSWORD <u> <new>\n";
+        std::cout << "  MANAGE_USERS <Action> ...                - 用户管理\n";
+        std::cout << "    Action: LIST | ADD <u> <p> <Role> | UPDATE_ROLE <u> <Role> | REMOVE <u> | RESET_PASSWORD <u> <new>\n";
         std::cout << "  BACKUP <path> | RESTORE <path> | VIEW_SYSTEM_STATUS\n";
         printAdminNumericMenu();
+        return;
     }
+
+    std::cout << "=== 提示 ===\n";
+    std::cout << "未识别的角色，暂无专属指引。\n";
     std::cout << "----------------\n";
+}
+
+void Cli::printAuthorNumericMenu() const
+{
+    std::cout << "[Author 数字菜单]\n";
+    std::cout << "  1) 提交新论文\n";
+    std::cout << "  2) 查看我的论文列表\n";
+    std::cout << "  3) 查看论文详情\n";
+    std::cout << "  4) 查看评审意见/状态\n";
+    std::cout << "  (直接输入数字开始操作；也可以直接输入原始命令)\n";
+    std::cout << "----------------\n";
+}
+
+bool Cli::handleAuthorMenuInput(const std::string& line)
+{
+    auto trim = [](const std::string& s) {
+        std::size_t b = s.find_first_not_of(" \t\r\n");
+        if (b == std::string::npos) return std::string{};
+        std::size_t e = s.find_last_not_of(" \t\r\n");
+        return s.substr(b, e - b + 1);
+    };
+
+    const std::string t = trim(line);
+
+    // 如果处于向导状态，消费输入
+    if (authorWizard_ != AuthorWizard::None)
+    {
+        switch (authorWizard_)
+        {
+        case AuthorWizard::SubmitAskTitle:
+            tempTitle_ = t;
+            std::cout << "输入论文内容（可包含空格）: ";
+            authorWizard_ = AuthorWizard::SubmitAskContent;
+            return true;
+        case AuthorWizard::SubmitAskContent:
+        {
+            const std::string content = t;
+            if (tempTitle_.empty())
+            {
+                std::cout << "标题不能为空。重新输入标题（不要含空格）: ";
+                authorWizard_ = AuthorWizard::SubmitAskTitle;
+                return true;
+            }
+            if (content.empty())
+            {
+                std::cout << "内容不能为空。重新输入论文内容: ";
+                return true;
+            }
+
+            const std::string cmd     = "SUBMIT " + tempTitle_ + " " + content;
+            const std::string payload = buildPayload(cmd);
+            osp::protocol::Message req{osp::protocol::MessageType::CommandRequest, payload};
+            osp::net::TcpClient tcpClient(host_, port_);
+            if (auto resp = tcpClient.request(req))
+            {
+                std::cout << resp->payload << '\n';
+            }
+            else
+            {
+                std::cout << "发送失败\n";
+            }
+            std::cout << "输入 c 继续提交，m 返回作者菜单，其他退出向导: ";
+            authorWizard_ = AuthorWizard::PostSubmitPrompt;
+            return true;
+        }
+        case AuthorWizard::ViewAskPaperId:
+        {
+            const std::string cmd     = "GET_PAPER " + t;
+            const std::string payload = buildPayload(cmd);
+            osp::protocol::Message req{osp::protocol::MessageType::CommandRequest, payload};
+            osp::net::TcpClient tcpClient(host_, port_);
+            if (auto resp = tcpClient.request(req))
+            {
+                std::cout << resp->payload << '\n';
+            }
+            else
+            {
+                std::cout << "发送失败\n";
+            }
+            std::cout << "输入 c 继续查看详情，m 返回作者菜单，其他退出向导: ";
+            authorWizard_ = AuthorWizard::PostViewPrompt;
+            return true;
+        }
+        case AuthorWizard::ViewReviewsAskPaperId:
+        {
+            const std::string cmd     = "LIST_REVIEWS " + t;
+            const std::string payload = buildPayload(cmd);
+            osp::protocol::Message req{osp::protocol::MessageType::CommandRequest, payload};
+            osp::net::TcpClient tcpClient(host_, port_);
+            if (auto resp = tcpClient.request(req))
+            {
+                std::cout << resp->payload << '\n';
+            }
+            else
+            {
+                std::cout << "发送失败\n";
+            }
+            std::cout << "输入 c 继续查看评审，m 返回作者菜单，其他退出向导: ";
+            authorWizard_ = AuthorWizard::PostViewReviewsPrompt;
+            return true;
+        }
+        case AuthorWizard::PostSubmitPrompt:
+            if (t == "c" || t == "C")
+            {
+                authorWizard_ = AuthorWizard::SubmitAskTitle;
+                std::cout << "提交新论文，输入标题（不要含空格）: ";
+                return true;
+            }
+            if (t == "m" || t == "M")
+            {
+                authorWizard_ = AuthorWizard::None;
+                printAuthorNumericMenu();
+                return true;
+            }
+            authorWizard_ = AuthorWizard::None;
+            return true;
+        case AuthorWizard::PostViewPrompt:
+            if (t == "c" || t == "C")
+            {
+                authorWizard_ = AuthorWizard::ViewAskPaperId;
+                std::cout << "查看论文详情，输入 paper_id: ";
+                return true;
+            }
+            if (t == "m" || t == "M")
+            {
+                authorWizard_ = AuthorWizard::None;
+                printAuthorNumericMenu();
+                return true;
+            }
+            authorWizard_ = AuthorWizard::None;
+            return true;
+        case AuthorWizard::PostViewReviewsPrompt:
+            if (t == "c" || t == "C")
+            {
+                authorWizard_ = AuthorWizard::ViewReviewsAskPaperId;
+                std::cout << "查看评审意见/状态，输入 paper_id: ";
+                return true;
+            }
+            if (t == "m" || t == "M")
+            {
+                authorWizard_ = AuthorWizard::None;
+                printAuthorNumericMenu();
+                return true;
+            }
+            authorWizard_ = AuthorWizard::None;
+            return true;
+        default: break;
+        }
+    }
+
+    // 非向导状态，识别数字入口
+    if (t == "1")
+    {
+        authorWizard_ = AuthorWizard::SubmitAskTitle;
+        std::cout << "提交新论文，输入标题（不要含空格）: ";
+        return true;
+    }
+    if (t == "2")
+    {
+        const std::string cmd     = "LIST_PAPERS";
+        const std::string payload = buildPayload(cmd);
+        osp::protocol::Message req{osp::protocol::MessageType::CommandRequest, payload};
+        osp::net::TcpClient tcpClient(host_, port_);
+        if (auto resp = tcpClient.request(req))
+        {
+            std::cout << resp->payload << '\n';
+        }
+        else
+        {
+            std::cout << "发送失败\n";
+        }
+        return true;
+    }
+    if (t == "3")
+    {
+        authorWizard_ = AuthorWizard::ViewAskPaperId;
+        std::cout << "查看论文详情，输入 paper_id: ";
+        return true;
+    }
+    if (t == "4")
+    {
+        authorWizard_ = AuthorWizard::ViewReviewsAskPaperId;
+        std::cout << "查看评审意见/状态，输入 paper_id: ";
+        return true;
+    }
+
+    return false; // 其他输入不处理，交给原有逻辑
+}
+
+void Cli::printReviewerNumericMenu() const
+{
+    std::cout << "[Reviewer 数字菜单]\n";
+    std::cout << "  1) 查看分配给我的论文列表\n";
+    std::cout << "  2) 查看论文详情\n";
+    std::cout << "  3) 提交评审报告\n";
+    std::cout << "  (直接输入数字开始操作；也可以直接输入原始命令)\n";
+    std::cout << "----------------\n";
+}
+
+bool Cli::handleReviewerMenuInput(const std::string& line)
+{
+    auto trim = [](const std::string& s) {
+        std::size_t b = s.find_first_not_of(" \t\r\n");
+        if (b == std::string::npos) return std::string{};
+        std::size_t e = s.find_last_not_of(" \t\r\n");
+        return s.substr(b, e - b + 1);
+    };
+
+    const std::string t = trim(line);
+
+    // 如果处于向导状态，消费输入
+    if (reviewerWizard_ != ReviewerWizard::None)
+    {
+        switch (reviewerWizard_)
+        {
+        case ReviewerWizard::ViewAskPaperId:
+        {
+            const std::string cmd     = "GET_PAPER " + t;
+            const std::string payload = buildPayload(cmd);
+            osp::protocol::Message req{osp::protocol::MessageType::CommandRequest, payload};
+            osp::net::TcpClient tcpClient(host_, port_);
+            if (auto resp = tcpClient.request(req))
+            {
+                std::cout << resp->payload << '\n';
+            }
+            else
+            {
+                std::cout << "发送失败\n";
+            }
+            std::cout << "输入 c 继续查看详情，m 返回审稿人菜单，其他退出向导: ";
+            reviewerWizard_ = ReviewerWizard::PostViewPrompt;
+            return true;
+        }
+        case ReviewerWizard::ReviewAskPaperId:
+            tempPaperId_ = t;
+            std::cout << "输入决定（ACCEPT/REJECT/MINOR/MAJOR）: ";
+            reviewerWizard_ = ReviewerWizard::ReviewAskDecision;
+            return true;
+        case ReviewerWizard::ReviewAskDecision:
+            tempDecision_ = t;
+            std::cout << "输入评审意见（可包含空格，必填）: ";
+            reviewerWizard_ = ReviewerWizard::ReviewAskComments;
+            return true;
+        case ReviewerWizard::ReviewAskComments:
+        {
+            const std::string comments = t;
+            const std::string cmd      = "REVIEW " + tempPaperId_ + " " + tempDecision_ + " " + comments;
+            const std::string payload  = buildPayload(cmd);
+            osp::protocol::Message req{osp::protocol::MessageType::CommandRequest, payload};
+            osp::net::TcpClient tcpClient(host_, port_);
+            if (auto resp = tcpClient.request(req))
+            {
+                std::cout << resp->payload << '\n';
+            }
+            else
+            {
+                std::cout << "发送失败\n";
+            }
+            std::cout << "输入 c 继续评审，m 返回审稿人菜单，其他退出向导: ";
+            reviewerWizard_ = ReviewerWizard::PostReviewPrompt;
+            return true;
+        }
+        case ReviewerWizard::PostViewPrompt:
+            if (t == "c" || t == "C")
+            {
+                reviewerWizard_ = ReviewerWizard::ViewAskPaperId;
+                std::cout << "查看论文详情，输入 paper_id: ";
+                return true;
+            }
+            if (t == "m" || t == "M")
+            {
+                reviewerWizard_ = ReviewerWizard::None;
+                printReviewerNumericMenu();
+                return true;
+            }
+            reviewerWizard_ = ReviewerWizard::None;
+            return true;
+        case ReviewerWizard::PostReviewPrompt:
+            if (t == "c" || t == "C")
+            {
+                reviewerWizard_ = ReviewerWizard::ReviewAskPaperId;
+                std::cout << "提交评审，输入 paper_id: ";
+                return true;
+            }
+            if (t == "m" || t == "M")
+            {
+                reviewerWizard_ = ReviewerWizard::None;
+                printReviewerNumericMenu();
+                return true;
+            }
+            reviewerWizard_ = ReviewerWizard::None;
+            return true;
+        default: break;
+        }
+    }
+
+    // 非向导状态，识别数字入口
+    if (t == "1")
+    {
+        const std::string cmd     = "LIST_PAPERS";
+        const std::string payload = buildPayload(cmd);
+        osp::protocol::Message req{osp::protocol::MessageType::CommandRequest, payload};
+        osp::net::TcpClient tcpClient(host_, port_);
+        if (auto resp = tcpClient.request(req))
+        {
+            std::cout << resp->payload << '\n';
+        }
+        else
+        {
+            std::cout << "发送失败\n";
+        }
+        return true;
+    }
+    if (t == "2")
+    {
+        reviewerWizard_ = ReviewerWizard::ViewAskPaperId;
+        std::cout << "查看论文详情，输入 paper_id: ";
+        return true;
+    }
+    if (t == "3")
+    {
+        reviewerWizard_ = ReviewerWizard::ReviewAskPaperId;
+        std::cout << "提交评审，输入 paper_id: ";
+        return true;
+    }
+
+    return false; // 其他输入不处理，交给原有逻辑
 }
 
 void Cli::printAdminNumericMenu() const
 {
     std::cout << "[Admin 数字菜单]\n";
-    std::cout << "1) 列出用户\n";
-    std::cout << "2) 添加 Reviewer\n";
-    std::cout << "3) 删除用户\n";
-    std::cout << "4) 更新用户角色\n";
-    std::cout << "5) 重置用户密码\n";
-    std::cout << "6) 备份\n";
-    std::cout << "7) 恢复\n";
-    std::cout << "8) 查看系统状态\n";
-    std::cout << "(直接输入数字开始操作，或输入原始命令也可)\n";
+    std::cout << "  1) 列出用户\n";
+    std::cout << "  2) 添加 Reviewer\n";
+    std::cout << "  3) 删除用户\n";
+    std::cout << "  4) 更新用户角色\n";
+    std::cout << "  5) 重置用户密码\n";
+    std::cout << "  6) 备份\n";
+    std::cout << "  7) 恢复\n";
+    std::cout << "  8) 查看系统状态\n";
+    std::cout << "  (直接输入数字开始操作；也可以直接输入原始命令)\n";
     std::cout << "----------------\n";
 }
 
@@ -693,10 +1056,10 @@ bool Cli::handleAdminMenuInput(const std::string& line)
 void Cli::printEditorNumericMenu() const
 {
     std::cout << "[Editor 数字菜单]\n";
-    std::cout << "1) 指派审稿人\n";
-    std::cout << "2) 查看审稿状态\n";
-    std::cout << "3) 最终决定\n";
-    std::cout << "(直接输入数字开始操作，或输入原始命令也可)\n";
+    std::cout << "  1) 指派审稿人\n";
+    std::cout << "  2) 查看审稿状态\n";
+    std::cout << "  3) 最终决定\n";
+    std::cout << "  (直接输入数字开始操作；也可以直接输入原始命令)\n";
     std::cout << "----------------\n";
 }
 
