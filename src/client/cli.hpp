@@ -32,14 +32,70 @@ private:
     void handleLoginResponse(const std::string& requestLine,
                              const osp::protocol::Message& resp);
 
-    // 根据角色打印对应的操作指引
-    void printHelpForRole(const std::string& role) const;
+    // 打印通用指引（PING/LOGIN/退出等）。
+    void printGeneralGuide() const;
+
+    // 登录成功后，基于当前角色打印可用命令提示。
+    void printRoleGuide() const;
+
+    // 处理管理员数字菜单的输入与多步流程。
+    bool handleAdminMenuInput(const std::string& line);
+    void printAdminNumericMenu() const;
+
+    // 处理编辑数字菜单的输入与多步流程。
+    bool handleEditorMenuInput(const std::string& line);
+    void printEditorNumericMenu() const;
 
 private:
     std::string    host_;
     unsigned short port_{};
-    std::string    sessionId_;   // 当前会话 ID，空字符串表示未登录
-    std::string    currentPath_ = "/"; // 客户端维护的“当前目录”（仅影响默认 LIST 等命令）
+    std::string    sessionId_;          // 当前会话 ID，空字符串表示未登录
+    std::string    currentUser_;        // 当前登录用户名
+    std::string    currentRole_;        // 当前登录角色（Admin / Editor / ...）
+    std::string    currentPath_ = "/";  // 客户端维护的“当前目录”（仅影响默认 LIST 等命令）
+
+    // 管理员数字菜单的临时状态
+    enum class AdminWizard
+    {
+        None,
+        AddReviewerAskName,
+        AddReviewerAskPassword,
+        RemoveUserAskName,
+        UpdateRoleAskName,
+        UpdateRoleAskRole,
+        ResetPwdAskName,
+        ResetPwdAskNewPwd,
+        BackupAskPath,
+        RestoreAskPath,
+        PostAddPrompt,
+        PostRemovePrompt,
+        PostUpdatePrompt,
+        PostResetPwdPrompt,
+        PostBackupPrompt,
+        PostRestorePrompt
+    };
+    AdminWizard  adminWizard_ = AdminWizard::None;
+    std::string  tempUsername_;
+    std::string  tempPassword_;
+    std::string  tempRole_;
+    std::string  tempPath_;
+
+    // 编辑数字菜单的临时状态
+    enum class EditorWizard
+    {
+        None,
+        AssignAskPaperId,
+        AssignAskReviewer,
+        ViewAskPaperId,
+        DecideAskPaperId,
+        DecideAskDecision,
+        PostAssignPrompt,
+        PostViewPrompt,
+        PostDecidePrompt
+    };
+    EditorWizard editorWizard_ = EditorWizard::None;
+    std::string  tempPaperId_;
+    std::string  tempDecision_;
 };
 
 } // namespace osp::client

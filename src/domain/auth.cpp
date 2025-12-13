@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <sstream>
+#include <vector>
 
 namespace osp::domain
 {
@@ -59,16 +60,6 @@ std::optional<Session> AuthService::login(const osp::Credentials& credentials)
     return s;
 }
 
-std::optional<UserId> AuthService::getUserId(const std::string& username) const
-{
-    auto it = usersByName_.find(username);
-    if (it == usersByName_.end())
-    {
-        return std::nullopt;
-    }
-    return it->second.id;
-}
-
 std::optional<Session> AuthService::validateSession(const std::string& sessionId) const
 {
     auto it = sessionsById_.find(sessionId);
@@ -77,6 +68,52 @@ std::optional<Session> AuthService::validateSession(const std::string& sessionId
         return std::nullopt;
     }
     return it->second;
+}
+
+bool AuthService::removeUser(const std::string& username)
+{
+    auto it = usersByName_.find(username);
+    if (it == usersByName_.end())
+    {
+        return false;
+    }
+    usersByName_.erase(it);
+    return true;
+}
+
+bool AuthService::updateUserRole(const std::string& username, Role role)
+{
+    auto it = usersByName_.find(username);
+    if (it == usersByName_.end())
+    {
+        return false;
+    }
+    it->second.role = role;
+    return true;
+}
+
+bool AuthService::resetUserPassword(const std::string& username, const std::string& newPassword)
+{
+    auto it = usersByName_.find(username);
+    if (it == usersByName_.end())
+    {
+        return false;
+    }
+    it->second.password = newPassword;
+    return true;
+}
+
+std::vector<User> AuthService::getAllUsers() const
+{
+    std::vector<User> users;
+    users.reserve(usersByName_.size());
+    
+    for (const auto& [username, storedUser] : usersByName_)
+    {
+        users.emplace_back(storedUser.id, storedUser.username, storedUser.role);
+    }
+    
+    return users;
 }
 
 std::string AuthService::generateSessionId() const

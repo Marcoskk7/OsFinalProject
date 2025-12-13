@@ -7,7 +7,6 @@
 
 #include <cstring>
 #include <string>
-#include <cerrno>
 
 namespace osp::net
 {
@@ -89,8 +88,7 @@ bool TcpServer::serveOnce(const std::function<osp::protocol::Message(const osp::
     const int listenFd = ::socket(AF_INET, SOCK_STREAM, 0);
     if (listenFd < 0)
     {
-        osp::log(osp::LogLevel::Error,
-                 std::string("TcpServer: failed to create socket: ") + std::strerror(errno));
+        osp::log(osp::LogLevel::Error, "TcpServer: failed to create socket");
         return false;
     }
 
@@ -104,34 +102,24 @@ bool TcpServer::serveOnce(const std::function<osp::protocol::Message(const osp::
 
     if (::bind(listenFd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0)
     {
-        osp::log(osp::LogLevel::Error,
-                 std::string("TcpServer: bind failed: ") + std::strerror(errno));
+        osp::log(osp::LogLevel::Error, "TcpServer: bind failed");
         ::close(listenFd);
         return false;
     }
 
     if (::listen(listenFd, 1) < 0)
     {
-        osp::log(osp::LogLevel::Error,
-                 std::string("TcpServer: listen failed: ") + std::strerror(errno));
+        osp::log(osp::LogLevel::Error, "TcpServer: listen failed");
         ::close(listenFd);
         return false;
     }
 
     osp::log(osp::LogLevel::Info, "TcpServer: waiting for connection...");
-    osp::log(osp::LogLevel::Debug,
-             std::string("TcpServer: about to accept on listenFd=") + std::to_string(listenFd));
 
     const int clientFd = ::accept(listenFd, nullptr, nullptr);
-    if (clientFd >= 0)
-    {
-        osp::log(osp::LogLevel::Info,
-                 std::string("TcpServer: accepted clientFd=") + std::to_string(clientFd));
-    }
     if (clientFd < 0)
     {
-        osp::log(osp::LogLevel::Error,
-                 std::string("TcpServer: accept failed: ") + std::strerror(errno));
+        osp::log(osp::LogLevel::Error, "TcpServer: accept failed");
         ::close(listenFd);
         return false;
     }
@@ -139,9 +127,7 @@ bool TcpServer::serveOnce(const std::function<osp::protocol::Message(const osp::
     auto maybeReq = recvMessage(clientFd);
     if (!maybeReq)
     {
-        osp::log(osp::LogLevel::Error,
-                 std::string("TcpServer: failed to receive message (clientFd=") + std::to_string(clientFd)
-                     + "): " + std::strerror(errno));
+        osp::log(osp::LogLevel::Error, "TcpServer: failed to receive message");
         ::close(clientFd);
         ::close(listenFd);
         return false;
@@ -152,12 +138,6 @@ bool TcpServer::serveOnce(const std::function<osp::protocol::Message(const osp::
 
     const auto resp = handler(req);
     const bool ok = sendMessage(clientFd, resp);
-    if (!ok)
-    {
-        osp::log(osp::LogLevel::Error,
-                 std::string("TcpServer: failed to send response (clientFd=") + std::to_string(clientFd)
-                     + "): " + std::strerror(errno));
-    }
 
     ::close(clientFd);
     ::close(listenFd);

@@ -3,7 +3,6 @@
 #include "common/types.hpp"
 
 #include <string>
-#include <optional>
 
 namespace osp::domain
 {
@@ -15,27 +14,6 @@ enum class ReviewDecision
     MajorRevision,
     Reject
 };
-
-inline std::string reviewDecisionToString(ReviewDecision d)
-{
-    switch (d)
-    {
-    case ReviewDecision::Accept: return "ACCEPT";
-    case ReviewDecision::MinorRevision: return "MINOR";
-    case ReviewDecision::MajorRevision: return "MAJOR";
-    case ReviewDecision::Reject: return "REJECT";
-    default: return "UNKNOWN";
-    }
-}
-
-inline std::optional<ReviewDecision> stringToReviewDecision(const std::string& s)
-{
-    if (s == "ACCEPT") return ReviewDecision::Accept;
-    if (s == "MINOR") return ReviewDecision::MinorRevision;
-    if (s == "MAJOR") return ReviewDecision::MajorRevision;
-    if (s == "REJECT") return ReviewDecision::Reject;
-    return std::nullopt;
-}
 
 struct Review
 {
