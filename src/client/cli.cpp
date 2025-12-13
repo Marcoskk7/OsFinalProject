@@ -98,6 +98,13 @@ void Cli::run()
             break;
         }
 
+        // 本地帮助命令：不与服务器交互，仅打印当前角色的精细指引，避免影响网络会话稳定性。
+        if (line == "ROLE_HELP" || line == "role_help")
+        {
+            printRoleGuide();
+            continue;
+        }
+
         if (line == "quit" || line == "exit")
         {
             osp::log(osp::LogLevel::Info, "Client exiting by user command");
@@ -206,7 +213,16 @@ void Cli::run()
         if (isLoginCommand(line))
         {
             handleLoginResponse(line, *resp);
-            printRoleGuide();
+            // 避免一次性输出过多内容，仅给出简单提示，由用户主动输入 ROLE_HELP 查看完整指引，降低潜在风险。
+            if (!currentRole_.empty())
+            {
+                std::cout << "当前角色: " << currentRole_
+                          << "，输入 ROLE_HELP 查看详细可用命令。\n";
+            }
+            else
+            {
+                std::cout << "登录成功，输入 ROLE_HELP 查看可用命令。\n";
+            }
         }
     }
 }
@@ -311,30 +327,40 @@ void Cli::printRoleGuide() const
     }
     std::cout << "\n";
 
-    if (currentRole_ == "Editor")
+    if (currentRole_ == "Author")
+    {
+        std::cout << "[Author 可用命令]\n";
+        std::cout << "  SUBMIT <Title> <Content...>  - 上传新论文\n";
+        std::cout << "  LIST_PAPERS                  - 查看自己提交的论文\n";
+        std::cout << "  GET_PAPER <PaperID>          - 查看论文详情\n";
+    }
+    else if (currentRole_ == "Reviewer")
+    {
+        std::cout << "[Reviewer 可用命令]\n";
+        std::cout << "  LIST_PAPERS                  - 查看分配给自己的论文\n";
+        std::cout << "  GET_PAPER <PaperID>          - 查看论文详情\n";
+        std::cout << "  REVIEW <PaperID> <Decision> <Comments...>\n";
+        std::cout << "                                 Decision: ACCEPT / REJECT / MINOR / MAJOR\n";
+    }
+    else if (currentRole_ == "Editor")
     {
         std::cout << "[Editor 可用命令]\n";
-        std::cout << "1) 指派审稿人: ASSIGN_REVIEWER <paper_id> <reviewer_username>\n";
-        std::cout << "2) 查看审稿状态: VIEW_REVIEW_STATUS <paper_id>\n";
-        std::cout << "3) 最终决定: MAKE_FINAL_DECISION <paper_id> <decision>\n";
+        std::cout << "  LIST_PAPERS                  - 查看所有论文\n";
+        std::cout << "  GET_PAPER <PaperID>          - 查看论文详情\n";
+        std::cout << "  ASSIGN <PaperID> <User>      - 分配审稿人\n";
+        std::cout << "  LIST_REVIEWS <PaperID>       - 查看论文所有评审\n";
+        std::cout << "  DECISION <PaperID> <Result>  - 最终接收/拒稿 (ACCEPT/REJECT)\n";
+        std::cout << "  （也可使用数字向导：见下）\n";
         printEditorNumericMenu();
     }
     else if (currentRole_ == "Admin")
     {
         std::cout << "[Admin 可用命令]\n";
-        std::cout << "MANAGE_USERS LIST | ADD <u> <p> <Role> | UPDATE_ROLE <u> <Role> | REMOVE <u> | RESET_PASSWORD <u> <new>\n";
-        std::cout << "BACKUP <path> | RESTORE <path> | VIEW_SYSTEM_STATUS\n";
+        std::cout << "  MKDIR / LIST / WRITE / READ / RM / RMDIR  - 文件管理\n";
+        std::cout << "  MANAGE_USERS LIST | ADD <u> <p> <Role> | UPDATE_ROLE <u> <Role>\n";
+        std::cout << "               | REMOVE <u> | RESET_PASSWORD <u> <new>\n";
+        std::cout << "  BACKUP <path> | RESTORE <path> | VIEW_SYSTEM_STATUS\n";
         printAdminNumericMenu();
-    }
-    else if (currentRole_ == "Reviewer")
-    {
-        std::cout << "[Reviewer 占位命令]\n";
-        std::cout << "(当前无专属命令，可使用文件/通用命令)\n";
-    }
-    else if (currentRole_ == "Author")
-    {
-        std::cout << "[Author 占位命令]\n";
-        std::cout << "(当前无专属命令，可使用文件/通用命令)\n";
     }
     std::cout << "----------------\n";
 }

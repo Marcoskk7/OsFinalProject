@@ -60,6 +60,16 @@ std::optional<Session> AuthService::login(const osp::Credentials& credentials)
     return s;
 }
 
+std::optional<UserId> AuthService::getUserId(const std::string& username) const
+{
+    auto it = usersByName_.find(username);
+    if (it == usersByName_.end())
+    {
+        return std::nullopt;
+    }
+    return it->second.id;
+}
+
 std::optional<Session> AuthService::validateSession(const std::string& sessionId) const
 {
     auto it = sessionsById_.find(sessionId);
