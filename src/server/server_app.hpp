@@ -9,6 +9,7 @@
 #include "domain/auth.hpp"
 
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -20,7 +21,7 @@ namespace osp::server
 class ServerApp
 {
 public:
-    explicit ServerApp(std::uint16_t port);
+    explicit ServerApp(std::uint16_t port, std::size_t cacheCapacity = 64);
 
     void run();    // 后续可改为事件循环
     void stop();   // 停止服务器

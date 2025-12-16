@@ -5,13 +5,25 @@
 #include "domain/review.hpp"
 
 #include <sstream>
+#include <cstdlib>
 
 namespace osp::server
 {
 
-ServerApp::ServerApp(std::uint16_t port)
+namespace
+{
+std::size_t clampCacheCapacity(std::size_t v)
+{
+    // 防止极端值导致内存占用过大；课程项目里给一个温和上限即可
+    constexpr std::size_t kMax = 4096;
+    if (v > kMax) return kMax;
+    return v;
+}
+}
+
+ServerApp::ServerApp(std::uint16_t port, std::size_t cacheCapacity)
     : port_(port)
-    , vfs_(64) // 简单设置缓存容量
+    , vfs_(clampCacheCapacity(cacheCapacity))
     , auth_()
 {
     // 初始化一些内置账号，便于本地测试与演示。
@@ -26,7 +38,9 @@ ServerApp::ServerApp(std::uint16_t port)
 void ServerApp::run()
 {
     running_.store(true);
-    osp::log(osp::LogLevel::Info, "Server starting on port " + std::to_string(port_));
+    osp::log(osp::LogLevel::Info,
+             "Server starting on port " + std::to_string(port_) + " (cacheCapacity="
+                 + std::to_string(vfs_.cacheCapacity()) + ")");
 
     // 挂载简化 VFS
     vfs_.mount("data.fs");
@@ -347,7 +361,72 @@ osp::protocol::Message ServerApp::handleCommand(const osp::protocol::Command&   
         {
             return {MessageType::Error, "VIEW_SYSTEM_STATUS: permission denied"};
         }
-        return {MessageType::CommandResponse, "System status:\n- Users: 4\n- Papers: 0\n- Reviews: 0\n- Sessions: " + std::to_string(1)};
+
+        const std::size_t userCount = auth_.getAllUsers().size();
+        const std::size_t sessionCount = auth_.sessionCount();
+
+        // Papers: 通过遍历 /papers/<id>/ 目录计数（只统计一级目录项）
+        std::size_t paperCount = 0;
+        auto papersListing = vfs_.listDirectory("/papers");
+        if (papersListing)
+        {
+            std::stringstream ss(*papersListing);
+            std::string       entry;
+            while (std::getline(ss, entry))
+            {
+                if (!entry.empty() && entry.back() == '/')
+                {
+                    ++paperCount;
+                }
+            }
+        }
+
+        // Reviews: 遍历每篇论文的 /reviews 目录内文件数量
+        std::size_t reviewCount = 0;
+        if (papersListing)
+        {
+            std::stringstream ss(*papersListing);
+            std::string       entry;
+            while (std::getline(ss, entry))
+            {
+                if (entry.empty() || entry.back() != '/')
+                {
+                    continue;
+                }
+
+                const std::string pidStr = entry.substr(0, entry.size() - 1);
+                const std::string reviewsDir = "/papers/" + pidStr + "/reviews";
+                auto reviewsListing = vfs_.listDirectory(reviewsDir);
+                if (!reviewsListing)
+                {
+                    continue;
+                }
+                std::stringstream rss(*reviewsListing);
+                std::string       f;
+                while (std::getline(rss, f))
+                {
+                    if (!f.empty() && f.back() != '/')
+                    {
+                        ++reviewCount;
+                    }
+                }
+            }
+        }
+
+        const auto cs = vfs_.cacheStats();
+        std::ostringstream out;
+        out << "System status:\n";
+        out << "- Users: " << userCount << "\n";
+        out << "- Sessions: " << sessionCount << "\n";
+        out << "- Papers: " << paperCount << "\n";
+        out << "- Reviews: " << reviewCount << "\n";
+        out << "- BlockCache: capacity=" << cs.capacity
+            << ", entries=" << cs.entries
+            << ", hits=" << cs.hits
+            << ", misses=" << cs.misses
+            << ", replacements=" << cs.replacements;
+
+        return {MessageType::CommandResponse, out.str()};
     }
 
     // 文件系统相关命令，统一通过 handleFsCommand 处理
