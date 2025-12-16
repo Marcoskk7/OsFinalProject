@@ -8,6 +8,7 @@
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 namespace osp::domain
 {
@@ -33,6 +34,18 @@ public:
     void addUser(const std::string& username,
                  const std::string& password,
                  Role               role);
+
+    // 删除一个用户
+    bool removeUser(const std::string& username);
+
+    // 更新用户角色
+    bool updateUserRole(const std::string& username, Role role);
+
+    // 重置用户密码
+    bool resetUserPassword(const std::string& username, const std::string& newPassword);
+
+    // 获取所有用户列表
+    std::vector<User> getAllUsers() const;
 
     // 尝试使用凭证登录，成功则返回新的 Session（并记录在服务内部），失败返回 std::nullopt。
     std::optional<Session> login(const osp::Credentials& credentials);

@@ -18,7 +18,7 @@ enum class PaperStatus
 struct Paper
 {
     PaperId id{};
-    UserId author{};
+    UserId  author{};
     std::string title;
     PaperStatus status{PaperStatus::Submitted};
 };
@@ -28,11 +28,11 @@ inline std::string paperStatusToString(PaperStatus s)
 {
     switch (s)
     {
-    case PaperStatus::Submitted: return "Submitted";
+    case PaperStatus::Submitted:   return "Submitted";
     case PaperStatus::UnderReview: return "UnderReview";
-    case PaperStatus::Accepted: return "Accepted";
-    case PaperStatus::Rejected: return "Rejected";
-    default: return "Unknown";
+    case PaperStatus::Accepted:    return "Accepted";
+    case PaperStatus::Rejected:    return "Rejected";
+    default:                       return "Unknown";
     }
 }
 

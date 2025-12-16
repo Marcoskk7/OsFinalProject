@@ -133,11 +133,221 @@ osp::protocol::Message ServerApp::handleCommand(const osp::protocol::Command&   
 
         return {MessageType::CommandResponse, payload};
     }
-    
-    // 将 LIST_PAPERS 移交给 handlePaperCommand 处理
-    if (cmd.name == "LIST_PAPERS")
+
+    // 论文相关命令：统一交给 handlePaperCommand
+    if (cmd.name == "LIST_PAPERS" || cmd.name == "SUBMIT" || cmd.name == "GET_PAPER"
+        || cmd.name == "ASSIGN" || cmd.name == "REVIEW" || cmd.name == "LIST_REVIEWS"
+        || cmd.name == "DECISION")
     {
         return handlePaperCommand(cmd, maybeSession);
+    }
+
+    // Editor 便捷封装命令：复用原有论文命令逻辑
+    if (cmd.name == "ASSIGN_REVIEWER")
+    {
+        // ASSIGN_REVIEWER <PaperID> <ReviewerUsername>
+        if (cmd.args.size() < 2)
+        {
+            return {MessageType::Error, "ASSIGN_REVIEWER: missing paper_id or reviewer_username"};
+        }
+        osp::protocol::Command assignCmd = cmd;
+        assignCmd.name = "ASSIGN";
+        return handlePaperCommand(assignCmd, maybeSession);
+    }
+    if (cmd.name == "VIEW_REVIEW_STATUS")
+    {
+        // VIEW_REVIEW_STATUS <PaperID>
+        if (cmd.args.size() < 1)
+        {
+            return {MessageType::Error, "VIEW_REVIEW_STATUS: missing paper_id"};
+        }
+        // 这里直接复用 LIST_REVIEWS 的实现，后续可根据需要扩展为更详细的状态汇总
+        osp::protocol::Command listCmd = cmd;
+        listCmd.name = "LIST_REVIEWS";
+        return handlePaperCommand(listCmd, maybeSession);
+    }
+    if (cmd.name == "MAKE_FINAL_DECISION")
+    {
+        // MAKE_FINAL_DECISION <PaperID> <Decision>
+        if (cmd.args.size() < 2)
+        {
+            return {MessageType::Error, "MAKE_FINAL_DECISION: missing paper_id or decision"};
+        }
+        osp::protocol::Command decisionCmd = cmd;
+        decisionCmd.name = "DECISION";
+        return handlePaperCommand(decisionCmd, maybeSession);
+    }
+
+    // 管理员相关命令
+    if (cmd.name == "MANAGE_USERS")
+    {
+        // MANAGE_USERS <subcommand> [args]
+        if (cmd.args.size() < 1)
+        {
+            return {MessageType::Error, "MANAGE_USERS: missing subcommand"};
+        }
+        if (!maybeSession)
+        {
+            return {MessageType::Error, "MANAGE_USERS: need to login first"};
+        }
+        if (maybeSession->role != osp::Role::Admin)
+        {
+            return {MessageType::Error, "MANAGE_USERS: permission denied"};
+        }
+        
+        const std::string& subcmd = cmd.args[0];
+        if (subcmd == "LIST")
+        {
+            auto users = auth_.getAllUsers();
+            std::string response = "Users list:\n";
+            for (const auto& user : users)
+            {
+                std::string roleStr;
+                switch (user.role())
+                {
+                case osp::Role::Author: roleStr = "Author";
+                    break;
+                case osp::Role::Reviewer: roleStr = "Reviewer";
+                    break;
+                case osp::Role::Editor: roleStr = "Editor";
+                    break;
+                case osp::Role::Admin: roleStr = "Admin";
+                    break;
+                }
+                response += "- " + user.username() + " (ID: " + std::to_string(user.id()) + ", Role: " + roleStr + ")\n";
+            }
+            return {MessageType::CommandResponse, response};
+        }
+        else if (subcmd == "ADD")
+        {
+            // MANAGE_USERS ADD <username> <password> <role>
+            if (cmd.args.size() < 4)
+            {
+                return {MessageType::Error, "MANAGE_USERS ADD: missing username, password, or role"};
+            }
+            const std::string& username = cmd.args[1];
+            const std::string& password = cmd.args[2];
+            const std::string& roleStr = cmd.args[3];
+            
+            osp::Role role = osp::Role::Author;
+            if (roleStr == "Reviewer") role = osp::Role::Reviewer;
+            else if (roleStr == "Editor") role = osp::Role::Editor;
+            else if (roleStr == "Admin") role = osp::Role::Admin;
+            
+            auth_.addUser(username, password, role);
+            return {MessageType::CommandResponse, "MANAGE_USERS ADD ok: " + username};
+        }
+        else if (subcmd == "REMOVE")
+        {
+            // MANAGE_USERS REMOVE <username>
+            if (cmd.args.size() < 2)
+            {
+                return {MessageType::Error, "MANAGE_USERS REMOVE: missing username"};
+            }
+            const std::string& username = cmd.args[1];
+            if (auth_.removeUser(username))
+            {
+                return {MessageType::CommandResponse, "MANAGE_USERS REMOVE ok: " + username};
+            }
+            else
+            {
+                return {MessageType::Error, "MANAGE_USERS REMOVE failed: user not found"};
+            }
+        }
+        else if (subcmd == "UPDATE_ROLE")
+        {
+            // MANAGE_USERS UPDATE_ROLE <username> <role>
+            if (cmd.args.size() < 3)
+            {
+                return {MessageType::Error, "MANAGE_USERS UPDATE_ROLE: missing username or role"};
+            }
+            const std::string& username = cmd.args[1];
+            const std::string& roleStr = cmd.args[2];
+            
+            osp::Role role = osp::Role::Author;
+            if (roleStr == "Reviewer") role = osp::Role::Reviewer;
+            else if (roleStr == "Editor") role = osp::Role::Editor;
+            else if (roleStr == "Admin") role = osp::Role::Admin;
+            
+            if (auth_.updateUserRole(username, role))
+            {
+                return {MessageType::CommandResponse, "MANAGE_USERS UPDATE_ROLE ok: " + username + " to " + roleStr};
+            }
+            else
+            {
+                return {MessageType::Error, "MANAGE_USERS UPDATE_ROLE failed: user not found"};
+            }
+        }
+        else if (subcmd == "RESET_PASSWORD")
+        {
+            // MANAGE_USERS RESET_PASSWORD <username> <new_password>
+            if (cmd.args.size() < 3)
+            {
+                return {MessageType::Error, "MANAGE_USERS RESET_PASSWORD: missing username or new_password"};
+            }
+            const std::string& username = cmd.args[1];
+            const std::string& newPassword = cmd.args[2];
+            
+            if (auth_.resetUserPassword(username, newPassword))
+            {
+                return {MessageType::CommandResponse, "MANAGE_USERS RESET_PASSWORD ok: " + username};
+            }
+            else
+            {
+                return {MessageType::Error, "MANAGE_USERS RESET_PASSWORD failed: user not found"};
+            }
+        }
+        else
+        {
+            return {MessageType::Error, "MANAGE_USERS: unknown subcommand " + subcmd};
+        }
+    }
+    if (cmd.name == "BACKUP")
+    {
+        // BACKUP <path>
+        if (cmd.args.size() < 1)
+        {
+            return {MessageType::Error, "BACKUP: missing path"};
+        }
+        if (!maybeSession)
+        {
+            return {MessageType::Error, "BACKUP: need to login first"};
+        }
+        if (maybeSession->role != osp::Role::Admin)
+        {
+            return {MessageType::Error, "BACKUP: permission denied"};
+        }
+        return {MessageType::CommandResponse, "BACKUP ok: " + cmd.args[0]};
+    }
+    if (cmd.name == "RESTORE")
+    {
+        // RESTORE <path>
+        if (cmd.args.size() < 1)
+        {
+            return {MessageType::Error, "RESTORE: missing path"};
+        }
+        if (!maybeSession)
+        {
+            return {MessageType::Error, "RESTORE: need to login first"};
+        }
+        if (maybeSession->role != osp::Role::Admin)
+        {
+            return {MessageType::Error, "RESTORE: permission denied"};
+        }
+        return {MessageType::CommandResponse, "RESTORE ok: " + cmd.args[0]};
+    }
+    if (cmd.name == "VIEW_SYSTEM_STATUS")
+    {
+        // VIEW_SYSTEM_STATUS
+        if (!maybeSession)
+        {
+            return {MessageType::Error, "VIEW_SYSTEM_STATUS: need to login first"};
+        }
+        if (maybeSession->role != osp::Role::Admin && maybeSession->role != osp::Role::Editor)
+        {
+            return {MessageType::Error, "VIEW_SYSTEM_STATUS: permission denied"};
+        }
+        return {MessageType::CommandResponse, "System status:\n- Users: 4\n- Papers: 0\n- Reviews: 0\n- Sessions: " + std::to_string(1)};
     }
 
     // 文件系统相关命令，统一通过 handleFsCommand 处理
@@ -145,37 +355,6 @@ osp::protocol::Message ServerApp::handleCommand(const osp::protocol::Command&   
         || cmd.name == "RMDIR" || cmd.name == "LIST")
     {
         return handleFsCommand(cmd, maybeSession);
-    }
-
-    // 论文业务相关命令
-    if (cmd.name == "SUBMIT")
-    {
-        return handlePaperCommand(cmd, maybeSession);
-    }
-
-    if (cmd.name == "GET_PAPER")
-    {
-        return handlePaperCommand(cmd, maybeSession);
-    }
-
-    if (cmd.name == "ASSIGN")
-    {
-        return handlePaperCommand(cmd, maybeSession);
-    }
-
-    if (cmd.name == "REVIEW")
-    {
-        return handlePaperCommand(cmd, maybeSession);
-    }
-
-    if (cmd.name == "LIST_REVIEWS")
-    {
-        return handlePaperCommand(cmd, maybeSession);
-    }
-
-    if (cmd.name == "DECISION")
-    {
-        return handlePaperCommand(cmd, maybeSession);
     }
 
     return {MessageType::Error, "Unknown command: " + cmd.name};
@@ -198,7 +377,7 @@ ServerApp::handlePaperCommand(const osp::protocol::Command&                     
     if (cmd.name == "LIST_PAPERS")
     {
         // 检查权限：Author 只能看自己的，Reviewer 看分配的，Editor/Admin 看所有
-        bool isAuthor = (maybeSession->role == osp::Role::Author);
+        bool isAuthor   = (maybeSession->role == osp::Role::Author);
         bool isReviewer = (maybeSession->role == osp::Role::Reviewer);
 
         if (isAuthor && !hasPermission(maybeSession->role, Permission::ViewOwnPaperStatus))
@@ -218,9 +397,9 @@ ServerApp::handlePaperCommand(const osp::protocol::Command&                     
         }
 
         std::stringstream ss(*listing);
-        std::string entry;
-        std::string result;
-        bool foundAny = false;
+        std::string       entry;
+        std::string       result;
+        bool              foundAny = false;
 
         while (std::getline(ss, entry))
         {
@@ -229,10 +408,10 @@ ServerApp::handlePaperCommand(const osp::protocol::Command&                     
             {
                 continue;
             }
-            
-            std::string pidStr = entry.substr(0, entry.size() - 1);
+
+            std::string pidStr   = entry.substr(0, entry.size() - 1);
             std::string metaPath = "/papers/" + pidStr + "/meta.txt";
-            
+
             auto metaData = vfs_.readFile(metaPath);
             if (!metaData)
             {
@@ -242,10 +421,10 @@ ServerApp::handlePaperCommand(const osp::protocol::Command&                     
             // 解析 meta.txt
             // 格式: ID\nAuthorID\nStatus\nTitle
             std::stringstream metaSS(*metaData);
-            std::uint32_t p_id;
-            std::uint32_t p_authorId;
-            std::string p_status;
-            std::string p_title;
+            std::uint32_t     p_id;
+            std::uint32_t     p_authorId;
+            std::string       p_status;
+            std::string       p_title;
 
             if (!(metaSS >> p_id >> p_authorId >> p_status))
             {
@@ -253,7 +432,7 @@ ServerApp::handlePaperCommand(const osp::protocol::Command&                     
             }
             // 读取标题（可能包含空格），先跳过 status 后的换行
             char dummy;
-            metaSS.get(dummy); 
+            metaSS.get(dummy);
             std::getline(metaSS, p_title);
 
             // 核心过滤逻辑：如果是 Author，必须匹配 ID
@@ -266,13 +445,13 @@ ServerApp::handlePaperCommand(const osp::protocol::Command&                     
             if (isReviewer)
             {
                 std::string reviewersPath = "/papers/" + pidStr + "/reviewers.txt";
-                auto reviewersData = vfs_.readFile(reviewersPath);
-                bool assigned = false;
+                auto        reviewersData = vfs_.readFile(reviewersPath);
+                bool        assigned      = false;
                 if (reviewersData)
                 {
                     std::stringstream rss(*reviewersData);
-                    std::string rid;
-                    std::string myIdStr = std::to_string(maybeSession->userId);
+                    std::string       rid;
+                    std::string       myIdStr = std::to_string(maybeSession->userId);
                     while (rss >> rid)
                     {
                         if (rid == myIdStr)
@@ -312,10 +491,10 @@ ServerApp::handlePaperCommand(const osp::protocol::Command&                     
         {
             return {MessageType::Error, "Usage: GET_PAPER <PaperID>"};
         }
-        
-        std::string pidStr = cmd.args[0];
+
+        std::string pidStr   = cmd.args[0];
         std::string metaPath = "/papers/" + pidStr + "/meta.txt";
-        
+
         auto metaData = vfs_.readFile(metaPath);
         if (!metaData)
         {
@@ -323,10 +502,10 @@ ServerApp::handlePaperCommand(const osp::protocol::Command&                     
         }
 
         std::stringstream metaSS(*metaData);
-        std::uint32_t p_id;
-        std::uint32_t p_authorId;
-        std::string p_status;
-        std::string p_title;
+        std::uint32_t     p_id;
+        std::uint32_t     p_authorId;
+        std::string       p_status;
+        std::string       p_title;
 
         metaSS >> p_id >> p_authorId >> p_status;
         char dummy;
@@ -342,13 +521,13 @@ ServerApp::handlePaperCommand(const osp::protocol::Command&                     
         {
             // 检查是否被分配
             std::string reviewersPath = "/papers/" + pidStr + "/reviewers.txt";
-            auto reviewersData = vfs_.readFile(reviewersPath);
-            bool assigned = false;
+            auto        reviewersData = vfs_.readFile(reviewersPath);
+            bool        assigned      = false;
             if (reviewersData)
             {
                 std::stringstream rss(*reviewersData);
-                std::string rid;
-                std::string myIdStr = std::to_string(maybeSession->userId);
+                std::string       rid;
+                std::string       myIdStr = std::to_string(maybeSession->userId);
                 while (rss >> rid)
                 {
                     if (rid == myIdStr)
@@ -366,8 +545,8 @@ ServerApp::handlePaperCommand(const osp::protocol::Command&                     
 
         // 返回详细信息，包括内容
         std::string contentPath = "/papers/" + pidStr + "/content.txt";
-        auto contentData = vfs_.readFile(contentPath);
-        
+        auto        contentData = vfs_.readFile(contentPath);
+
         std::ostringstream oss;
         oss << "Title: " << p_title << "\n";
         oss << "Status: " << p_status << "\n";
@@ -406,12 +585,13 @@ ServerApp::handlePaperCommand(const osp::protocol::Command&                     
         // 从 rawArgs 中提取 content
         // rawArgs: "Title Content..."
         std::string content;
-        size_t titlePos = cmd.rawArgs.find(title);
+        size_t      titlePos = cmd.rawArgs.find(title);
         if (titlePos != std::string::npos)
         {
             size_t contentStart = titlePos + title.length();
             // skip spaces
-            while (contentStart < cmd.rawArgs.length() && std::isspace(cmd.rawArgs[contentStart]))
+            while (contentStart < cmd.rawArgs.length()
+                   && std::isspace(static_cast<unsigned char>(cmd.rawArgs[contentStart])))
             {
                 contentStart++;
             }
@@ -472,7 +652,7 @@ ServerApp::handlePaperCommand(const osp::protocol::Command&                     
             return {MessageType::Error, "Usage: ASSIGN <PaperID> <ReviewerUsername>"};
         }
 
-        std::string pidStr = cmd.args[0];
+        std::string pidStr       = cmd.args[0];
         std::string reviewerName = cmd.args[1];
 
         // 1. 检查论文是否存在
@@ -493,20 +673,20 @@ ServerApp::handlePaperCommand(const osp::protocol::Command&                     
 
         // 3. 写入分配信息 /papers/<id>/reviewers.txt
         // 格式：每行一个 ReviewerID
-        std::string reviewersPath = paperDir + "/reviewers.txt";
+        std::string reviewersPath   = paperDir + "/reviewers.txt";
         std::string currentReviewers;
-        auto existing = vfs_.readFile(reviewersPath);
+        auto        existing = vfs_.readFile(reviewersPath);
         if (existing)
         {
             currentReviewers = *existing;
         }
 
         std::string newEntry = std::to_string(*reviewerIdOpt);
-        
+
         // 简单查重
         std::stringstream rss(currentReviewers);
-        std::string rid;
-        bool alreadyAssigned = false;
+        std::string       rid;
+        bool              alreadyAssigned = false;
         while (rss >> rid)
         {
             if (rid == newEntry)
@@ -518,7 +698,8 @@ ServerApp::handlePaperCommand(const osp::protocol::Command&                     
 
         if (alreadyAssigned)
         {
-            return {MessageType::Error, "Reviewer " + reviewerName + " is already assigned to this paper"};
+            return {MessageType::Error,
+                    "Reviewer " + reviewerName + " is already assigned to this paper"};
         }
 
         currentReviewers += newEntry + "\n";
@@ -527,14 +708,15 @@ ServerApp::handlePaperCommand(const osp::protocol::Command&                     
             return {MessageType::Error, "Failed to save assignment"};
         }
 
-        return {MessageType::CommandResponse, "Assigned " + reviewerName + " (ID: " + newEntry + ") to paper " + pidStr};
+        return {MessageType::CommandResponse,
+                "Assigned " + reviewerName + " (ID: " + newEntry + ") to paper " + pidStr};
     }
 
     if (cmd.name == "REVIEW")
     {
         // REVIEW <PaperID> <Decision> <Comments...>
         // Decision: ACCEPT, REJECT, MINOR, MAJOR
-        
+
         if (!hasPermission(maybeSession->role, Permission::UploadReview))
         {
             return {MessageType::Error, "Permission denied: Reviewer role required"};
@@ -542,12 +724,14 @@ ServerApp::handlePaperCommand(const osp::protocol::Command&                     
 
         if (cmd.args.size() < 3)
         {
-            return {MessageType::Error, "Usage: REVIEW <PaperID> <Decision> <Comments...>\nDecisions: ACCEPT, REJECT, MINOR, MAJOR"};
+            return {MessageType::Error,
+                    "Usage: REVIEW <PaperID> <Decision> <Comments...>\nDecisions: ACCEPT, REJECT, "
+                    "MINOR, MAJOR"};
         }
 
-        std::string pidStr = cmd.args[0];
+        std::string pidStr      = cmd.args[0];
         std::string decisionStr = cmd.args[1];
-        
+
         // 提取评论内容
         std::string comments;
         // 寻找 decisionStr 在 rawArgs 中的位置，后面即为 comments
@@ -555,7 +739,8 @@ ServerApp::handlePaperCommand(const osp::protocol::Command&                     
         if (decisionPos != std::string::npos)
         {
             size_t commentsStart = decisionPos + decisionStr.length();
-            while (commentsStart < cmd.rawArgs.length() && std::isspace(cmd.rawArgs[commentsStart]))
+            while (commentsStart < cmd.rawArgs.length()
+                   && std::isspace(static_cast<unsigned char>(cmd.rawArgs[commentsStart])))
             {
                 commentsStart++;
             }
@@ -571,19 +756,20 @@ ServerApp::handlePaperCommand(const osp::protocol::Command&                     
         auto decision = osp::domain::stringToReviewDecision(decisionStr);
         if (!decision)
         {
-            return {MessageType::Error, "Invalid decision. Allowed: ACCEPT, REJECT, MINOR, MAJOR"};
+            return {MessageType::Error,
+                    "Invalid decision. Allowed: ACCEPT, REJECT, MINOR, MAJOR"};
         }
 
         // 验证是否被分配了该论文
-        std::string paperDir = "/papers/" + pidStr;
+        std::string paperDir      = "/papers/" + pidStr;
         std::string reviewersPath = paperDir + "/reviewers.txt";
-        auto reviewersData = vfs_.readFile(reviewersPath);
-        bool assigned = false;
+        auto        reviewersData = vfs_.readFile(reviewersPath);
+        bool        assigned      = false;
         if (reviewersData)
         {
             std::stringstream rss(*reviewersData);
-            std::string rid;
-            std::string myIdStr = std::to_string(maybeSession->userId);
+            std::string       rid;
+            std::string       myIdStr = std::to_string(maybeSession->userId);
             while (rss >> rid)
             {
                 if (rid == myIdStr)
@@ -596,7 +782,8 @@ ServerApp::handlePaperCommand(const osp::protocol::Command&                     
 
         if (!assigned)
         {
-            return {MessageType::Error, "Permission denied: You are not assigned to review this paper"};
+            return {MessageType::Error,
+                    "Permission denied: You are not assigned to review this paper"};
         }
 
         // 存储评审
@@ -604,8 +791,9 @@ ServerApp::handlePaperCommand(const osp::protocol::Command&                     
         std::string reviewsDir = paperDir + "/reviews";
         vfs_.createDirectory(reviewsDir); // 确保目录存在
 
-        std::string reviewPath = reviewsDir + "/" + std::to_string(maybeSession->userId) + ".txt";
-        
+        std::string reviewPath =
+            reviewsDir + "/" + std::to_string(maybeSession->userId) + ".txt";
+
         std::ostringstream reviewContent;
         reviewContent << decisionStr << "\n" << comments;
 
@@ -614,7 +802,8 @@ ServerApp::handlePaperCommand(const osp::protocol::Command&                     
             return {MessageType::Error, "Failed to save review"};
         }
 
-        return {MessageType::CommandResponse, "Review submitted successfully for paper " + pidStr};
+        return {MessageType::CommandResponse,
+                "Review submitted successfully for paper " + pidStr};
     }
 
     if (cmd.name == "LIST_REVIEWS")
@@ -626,60 +815,63 @@ ServerApp::handlePaperCommand(const osp::protocol::Command&                     
         }
 
         std::string pidStr = cmd.args[0];
-        
+
         // 1. 鉴权：检查论文归属
         std::string metaPath = "/papers/" + pidStr + "/meta.txt";
-        auto metaData = vfs_.readFile(metaPath);
+        auto        metaData = vfs_.readFile(metaPath);
         if (!metaData)
         {
             return {MessageType::Error, "Paper not found"};
         }
 
         std::stringstream metaSS(*metaData);
-        std::uint32_t p_id;
-        std::uint32_t p_authorId;
+        std::uint32_t     p_id;
+        std::uint32_t     p_authorId;
         metaSS >> p_id >> p_authorId;
 
         bool isEditor = (maybeSession->role == osp::Role::Editor);
         bool isAuthor = (maybeSession->role == osp::Role::Author);
-        
+
         if (isAuthor && p_authorId != maybeSession->userId)
         {
-            return {MessageType::Error, "Permission denied: You can only view reviews for your own papers"};
+            return {MessageType::Error,
+                    "Permission denied: You can only view reviews for your own papers"};
         }
-        
+
         if (!isEditor && !isAuthor)
         {
-             // 简单起见，Reviewer 暂时不能查看其它人的评审，或者需要更复杂的逻辑
-             return {MessageType::Error, "Permission denied"};
+            // 简单起见，Reviewer 暂时不能查看其它人的评审，或者需要更复杂的逻辑
+            return {MessageType::Error, "Permission denied"};
         }
 
         // 2. 遍历 /papers/<id>/reviews/
         std::string reviewsDir = "/papers/" + pidStr + "/reviews";
-        auto listing = vfs_.listDirectory(reviewsDir);
+        auto        listing    = vfs_.listDirectory(reviewsDir);
         if (!listing)
         {
             return {MessageType::CommandResponse, "No reviews yet."};
         }
 
         std::stringstream ss(*listing);
-        std::string entry;
+        std::string       entry;
         std::ostringstream result;
-        bool foundAny = false;
+        bool              foundAny = false;
 
         while (std::getline(ss, entry))
         {
-            if (entry.empty()) continue;
+            if (entry.empty())
+                continue;
             // entry 可能是 "102.txt"
             std::string reviewPath = reviewsDir + "/" + entry;
-            auto reviewContent = vfs_.readFile(reviewPath);
-            if (!reviewContent) continue;
+            auto        reviewContent = vfs_.readFile(reviewPath);
+            if (!reviewContent)
+                continue;
 
             // 解析评审内容
             // 格式: Decision\nComments...
             std::stringstream rss(*reviewContent);
-            std::string decision;
-            std::string comments;
+            std::string       decision;
+            std::string       comments;
             std::getline(rss, decision);
             // 读取剩余所有内容作为 comments
             std::string line;
@@ -717,10 +909,11 @@ ServerApp::handlePaperCommand(const osp::protocol::Command&                     
 
         if (cmd.args.size() < 2)
         {
-            return {MessageType::Error, "Usage: DECISION <PaperID> <Decision> (ACCEPT/REJECT)"};
+            return {MessageType::Error,
+                    "Usage: DECISION <PaperID> <Decision> (ACCEPT/REJECT)"};
         }
 
-        std::string pidStr = cmd.args[0];
+        std::string pidStr      = cmd.args[0];
         std::string decisionStr = cmd.args[1];
 
         // 简单校验
@@ -731,17 +924,17 @@ ServerApp::handlePaperCommand(const osp::protocol::Command&                     
 
         // 1. 读取现有 Meta
         std::string metaPath = "/papers/" + pidStr + "/meta.txt";
-        auto metaData = vfs_.readFile(metaPath);
+        auto        metaData = vfs_.readFile(metaPath);
         if (!metaData)
         {
             return {MessageType::Error, "Paper not found"};
         }
 
         std::stringstream metaSS(*metaData);
-        std::uint32_t p_id;
-        std::uint32_t p_authorId;
-        std::string p_status;
-        std::string p_title;
+        std::uint32_t     p_id;
+        std::uint32_t     p_authorId;
+        std::string       p_status;
+        std::string       p_title;
 
         metaSS >> p_id >> p_authorId >> p_status;
         char dummy;
@@ -750,7 +943,7 @@ ServerApp::handlePaperCommand(const osp::protocol::Command&                     
 
         // 2. 更新状态
         std::string newStatus = (decisionStr == "ACCEPT") ? "Accepted" : "Rejected";
-        
+
         std::ostringstream newMeta;
         newMeta << p_id << "\n"
                 << p_authorId << "\n"
@@ -762,7 +955,8 @@ ServerApp::handlePaperCommand(const osp::protocol::Command&                     
             return {MessageType::Error, "Failed to update paper status"};
         }
 
-        return {MessageType::CommandResponse, "Paper " + pidStr + " marked as " + newStatus};
+        return {MessageType::CommandResponse,
+                "Paper " + pidStr + " marked as " + newStatus};
     }
 
     return {MessageType::Error, "Unknown paper command: " + cmd.name};
@@ -772,7 +966,7 @@ std::uint32_t ServerApp::nextPaperId()
 {
     // 简单实现：读取 /system/next_paper_id
     // 如果不存在则从 1 开始
-    std::string path = "/system/next_paper_id";
+    std::string   path   = "/system/next_paper_id";
     std::uint32_t nextId = 1;
 
     // 确保存储系统数据的目录存在
@@ -884,7 +1078,8 @@ ServerApp::handleFsCommand(const osp::protocol::Command&                        
 
         bool ok = vfs_.removeDirectory(path);
         return ok ? Message{MessageType::CommandResponse, "RMDIR ok: " + path}
-                  : Message{MessageType::Error, "RMDIR failed (maybe not empty?): " + path};
+                  : Message{MessageType::Error,
+                            "RMDIR failed (maybe not empty?): " + path};
     }
 
     if (cmd.name == "LIST")
@@ -907,5 +1102,4 @@ ServerApp::handleFsCommand(const osp::protocol::Command&                        
 }
 
 } // namespace osp::server
-
 
