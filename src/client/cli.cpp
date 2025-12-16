@@ -16,7 +16,6 @@ namespace
 
 bool isLoginCommand(std::string_view line)
 {
-    // 判断是否以 "LOGIN" 或 "login" 开头（忽略前导空格，大小写不敏感）
     std::size_t i = 0;
     while (i < line.size() && std::isspace(static_cast<unsigned char>(line[i])))
     {
@@ -36,7 +35,6 @@ bool isLoginCommand(std::string_view line)
         }
     }
 
-    // 后面要么是空白、要么行结束
     if (i + 5 < line.size())
     {
         char c = line[i + 5];
@@ -50,7 +48,6 @@ bool isLoginCommand(std::string_view line)
 
 bool isCdCommand(std::string_view line)
 {
-    // 判断是否以 "CD" 或 "cd" 开头（忽略前导空格，大小写不敏感）
     std::size_t i = 0;
     while (i < line.size() && std::isspace(static_cast<unsigned char>(line[i])))
     {
@@ -83,6 +80,78 @@ bool isCdCommand(std::string_view line)
 
 } // namespace
 
+osp::protocol::json Cli::buildJsonPayload(const std::string& line) const
+{
+    using osp::protocol::json;
+    using osp::protocol::Command;
+
+    // 解析命令行
+    Command cmd = osp::protocol::parseCommandLine(line);
+    
+    // 对于 LIST 命令，如果没有参数则使用当前目录
+    if (cmd.name == "LIST" && cmd.rawArgs.empty())
+    {
+        cmd.rawArgs = currentPath_;
+        cmd.args.clear();
+        cmd.args.push_back(currentPath_);
+    }
+
+    // 如果已登录且不是 LOGIN 命令，携带 sessionId
+    if (!sessionId_.empty() && !isLoginCommand(line))
+    {
+        cmd.sessionId = sessionId_;
+    }
+
+    return osp::protocol::commandToJson(cmd);
+}
+
+std::optional<osp::protocol::Message> Cli::sendRequest(const osp::protocol::json& payload)
+{
+    osp::protocol::Message req;
+    req.type = osp::protocol::MessageType::CommandRequest;
+    req.payload = payload;
+
+    osp::log(osp::LogLevel::Info, "Send request: " + payload.dump() + " to " + host_ + ":" + std::to_string(port_));
+
+    osp::net::TcpClient tcpClient(host_, port_);
+    return tcpClient.request(req);
+}
+
+void Cli::handleLoginResponse(const osp::protocol::Message& resp)
+{
+    using osp::protocol::json;
+
+    if (resp.type != osp::protocol::MessageType::CommandResponse)
+    {
+        return;
+    }
+
+    // 检查是否成功
+    if (!resp.payload.value("ok", false))
+    {
+        return;
+    }
+
+    const json& data = resp.payload.value("data", json::object());
+    
+    sessionId_ = data.value("sessionId", "");
+    currentUser_ = data.value("username", "");
+    currentRole_ = data.value("role", "");
+
+    if (!sessionId_.empty())
+    {
+        osp::log(osp::LogLevel::Info, "Logged in as " + currentUser_ + " (" + currentRole_ + ")");
+    }
+}
+
+void Cli::printResponse(const osp::protocol::Message& resp) const
+{
+    using osp::protocol::json;
+
+    // 输出格式化的 JSON
+    std::cout << resp.payload.dump(2) << '\n';
+}
+
 void Cli::run()
 {
     osp::log(osp::LogLevel::Info, "Client CLI started. Type commands or 'quit' to exit.");
@@ -94,11 +163,10 @@ void Cli::run()
         std::string line;
         if (!std::getline(std::cin, line))
         {
-            // EOF 或输入流错误，退出客户端
             break;
         }
 
-        // 本地帮助命令：不与服务器交互，仅打印当前角色的精细指引，避免影响网络会话稳定性。
+        // 本地帮助命令
         if (line == "ROLE_HELP" || line == "role_help")
         {
             printRoleGuide();
@@ -116,7 +184,7 @@ void Cli::run()
             continue;
         }
 
-        // 作者/审稿人/管理员/编辑：数字菜单 / 向导处理（优先于普通命令）
+        // 角色数字菜单处理
         if (currentRole_ == "Author")
         {
             if (handleAuthorMenuInput(line))
@@ -131,7 +199,6 @@ void Cli::run()
                 continue;
             }
         }
-        // 管理员数字菜单 / 向导处理（优先于普通命令）
         else if (currentRole_ == "Admin")
         {
             if (handleAdminMenuInput(line))
@@ -147,7 +214,7 @@ void Cli::run()
             }
         }
 
-        // 特殊处理 CD 命令：仅在客户端更新当前目录，并向服务器发送一次 LIST 进行合法性校验。
+        // CD 命令特殊处理
         if (isCdCommand(line))
         {
             osp::protocol::Command cmd = osp::protocol::parseCommandLine(line);
@@ -159,7 +226,6 @@ void Cli::run()
 
             const std::string& target = cmd.args[0];
 
-            // 计算新的工作目录（不支持 "." / ".." 等特殊路径，仅支持简单的绝对或相对路径）。
             std::string newPath;
             if (!target.empty() && target[0] == '/')
             {
@@ -177,16 +243,20 @@ void Cli::run()
                 }
             }
 
-            // 通过向服务器发送 LIST newPath 来验证该目录是否存在且可访问。
-            const std::string listLine = "LIST " + newPath;
-            const std::string payload = buildPayload(listLine);
-            osp::protocol::Message req{osp::protocol::MessageType::CommandRequest, payload};
+            // 验证目录存在
+            osp::protocol::json listPayload;
+            listPayload["cmd"] = "LIST";
+            listPayload["args"] = {newPath};
+            if (!sessionId_.empty())
+            {
+                listPayload["sessionId"] = sessionId_;
+            }
+            else
+            {
+                listPayload["sessionId"] = nullptr;
+            }
 
-            osp::log(osp::LogLevel::Info,
-                     "Send request: " + req.payload + " to " + host_ + ":" + std::to_string(port_));
-
-            osp::net::TcpClient tcpClient(host_, port_);
-            auto                resp = tcpClient.request(req);
+            auto resp = sendRequest(listPayload);
             if (!resp)
             {
                 osp::log(osp::LogLevel::Error, "CD: failed to contact server");
@@ -194,129 +264,41 @@ void Cli::run()
                 continue;
             }
 
-            if (resp->type == osp::protocol::MessageType::Error)
+            if (resp->type == osp::protocol::MessageType::Error || !resp->payload.value("ok", false))
             {
-                std::cout << "CD failed: " << resp->payload << '\n';
+                std::cout << "CD failed: " << resp->payload.dump() << '\n';
                 continue;
             }
 
-            // LIST 成功，更新当前目录，但不打印目录内容，避免与 LIST 命令的语义混淆。
             currentPath_ = newPath;
             std::cout << "Current directory: " << currentPath_ << '\n';
             continue;
         }
 
-        const std::string payload = buildPayload(line);
-        osp::protocol::Message req{osp::protocol::MessageType::CommandRequest, payload};
+        // 普通命令处理
+        auto payload = buildJsonPayload(line);
+        auto resp = sendRequest(payload);
 
-        osp::log(osp::LogLevel::Info,
-                 "Send request: " + req.payload + " to " + host_ + ":" + std::to_string(port_));
-
-        osp::net::TcpClient tcpClient(host_, port_);
-        auto                resp = tcpClient.request(req);
         if (!resp)
         {
             osp::log(osp::LogLevel::Error, "Failed to receive response from server");
             continue;
         }
 
-        // 日志只输出简要信息，实际结果由标准输出打印，避免重复显示内容。
         osp::log(osp::LogLevel::Info, "Received response from server");
-        std::cout << resp->payload << '\n';
+        printResponse(*resp);
 
-        // 如果这是一次 LOGIN 调用并且服务器返回成功的会话信息，则更新本地 sessionId_
+        // 如果是 LOGIN 命令，处理登录响应
         if (isLoginCommand(line))
         {
-            handleLoginResponse(line, *resp);
-            // 避免一次性输出过多内容，仅给出简单提示，由用户主动输入 ROLE_HELP 查看完整指引，降低潜在风险。
+            handleLoginResponse(*resp);
             if (!currentRole_.empty())
             {
                 std::cout << "当前角色: " << currentRole_
                           << "，输入 ROLE_HELP 查看详细可用命令。\n";
             }
-            else
-            {
-                std::cout << "登录成功，输入 ROLE_HELP 查看可用命令。\n";
-            }
         }
     }
-}
-
-std::string Cli::buildPayload(const std::string& line) const
-{
-    // LOGIN 始终不自动附加 SESSION 前缀，防止递归/混淆；
-    // 其他命令在已登录时自动附加 "SESSION <sessionId> CMD ..." 前缀。
-    if (isLoginCommand(line))
-    {
-        return line;
-    }
-
-    osp::protocol::Command cmd = osp::protocol::parseCommandLine(line);
-    if (cmd.name.empty())
-    {
-        return line; // 解析失败则回退为原始行
-    }
-
-    // 当用户输入简单的 "LIST" 时，自动在客户端侧使用当前目录作为参数。
-    if (cmd.name == "LIST" && cmd.rawArgs.empty())
-    {
-        cmd.rawArgs.clear();
-        cmd.args.clear();
-        cmd.rawArgs = currentPath_;
-        cmd.args.push_back(currentPath_);
-    }
-
-    if (!sessionId_.empty())
-    {
-        cmd.sessionId = sessionId_;
-        return osp::protocol::buildCommandPayload(cmd);
-    }
-
-    // 未登录时，保持原始格式（不添加 SESSION/CMD 前缀）
-    return osp::protocol::buildCommandPayload(cmd);
-}
-
-void Cli::handleLoginResponse(const std::string&               requestLine,
-                              const osp::protocol::Message& resp)
-{
-    if (resp.type != osp::protocol::MessageType::CommandResponse)
-    {
-        return;
-    }
-
-    // 预期格式： "SESSION <id> USER <username> ROLE <RoleName>"
-    const std::string& p = resp.payload;
-    constexpr const char* kPrefix = "SESSION ";
-
-    if (p.rfind(kPrefix, 0) != 0)
-    {
-        // 不是成功的登录响应，可能是错误信息
-        return;
-    }
-
-    const std::size_t idStart = std::char_traits<char>::length(kPrefix);
-    auto              idEnd = p.find(' ', idStart);
-    std::string       newId =
-        (idEnd == std::string::npos) ? p.substr(idStart) : p.substr(idStart, idEnd - idStart);
-
-    if (newId.empty())
-    {
-        return;
-    }
-
-    sessionId_ = newId;
-
-    // 解析 USER 与 ROLE（格式：SESSION <id> USER <username> ROLE <Role>）
-    auto userPos = p.find(" USER ");
-    auto rolePos = p.find(" ROLE ");
-    if (userPos != std::string::npos && rolePos != std::string::npos && rolePos > userPos + 6)
-    {
-        currentUser_ = p.substr(userPos + 6, rolePos - (userPos + 6));
-        currentRole_ = p.substr(rolePos + 6);
-    }
-
-    osp::log(osp::LogLevel::Info, "Updated session id from LOGIN '" + requestLine
-                                      + "': " + sessionId_);
 }
 
 void Cli::printGeneralGuide() const
@@ -423,7 +405,6 @@ bool Cli::handleAuthorMenuInput(const std::string& line)
 
     const std::string t = trim(line);
 
-    // 如果处于向导状态，消费输入
     if (authorWizard_ != AuthorWizard::None)
     {
         switch (authorWizard_)
@@ -448,13 +429,10 @@ bool Cli::handleAuthorMenuInput(const std::string& line)
                 return true;
             }
 
-            const std::string cmd     = "SUBMIT " + tempTitle_ + " " + content;
-            const std::string payload = buildPayload(cmd);
-            osp::protocol::Message req{osp::protocol::MessageType::CommandRequest, payload};
-            osp::net::TcpClient tcpClient(host_, port_);
-            if (auto resp = tcpClient.request(req))
+            auto payload = buildJsonPayload("SUBMIT " + tempTitle_ + " " + content);
+            if (auto resp = sendRequest(payload))
             {
-                std::cout << resp->payload << '\n';
+                printResponse(*resp);
             }
             else
             {
@@ -466,13 +444,10 @@ bool Cli::handleAuthorMenuInput(const std::string& line)
         }
         case AuthorWizard::ViewAskPaperId:
         {
-            const std::string cmd     = "GET_PAPER " + t;
-            const std::string payload = buildPayload(cmd);
-            osp::protocol::Message req{osp::protocol::MessageType::CommandRequest, payload};
-            osp::net::TcpClient tcpClient(host_, port_);
-            if (auto resp = tcpClient.request(req))
+            auto payload = buildJsonPayload("GET_PAPER " + t);
+            if (auto resp = sendRequest(payload))
             {
-                std::cout << resp->payload << '\n';
+                printResponse(*resp);
             }
             else
             {
@@ -484,13 +459,10 @@ bool Cli::handleAuthorMenuInput(const std::string& line)
         }
         case AuthorWizard::ViewReviewsAskPaperId:
         {
-            const std::string cmd     = "LIST_REVIEWS " + t;
-            const std::string payload = buildPayload(cmd);
-            osp::protocol::Message req{osp::protocol::MessageType::CommandRequest, payload};
-            osp::net::TcpClient tcpClient(host_, port_);
-            if (auto resp = tcpClient.request(req))
+            auto payload = buildJsonPayload("LIST_REVIEWS " + t);
+            if (auto resp = sendRequest(payload))
             {
-                std::cout << resp->payload << '\n';
+                printResponse(*resp);
             }
             else
             {
@@ -549,7 +521,6 @@ bool Cli::handleAuthorMenuInput(const std::string& line)
         }
     }
 
-    // 非向导状态，识别数字入口
     if (t == "1")
     {
         authorWizard_ = AuthorWizard::SubmitAskTitle;
@@ -558,13 +529,10 @@ bool Cli::handleAuthorMenuInput(const std::string& line)
     }
     if (t == "2")
     {
-        const std::string cmd     = "LIST_PAPERS";
-        const std::string payload = buildPayload(cmd);
-        osp::protocol::Message req{osp::protocol::MessageType::CommandRequest, payload};
-        osp::net::TcpClient tcpClient(host_, port_);
-        if (auto resp = tcpClient.request(req))
+        auto payload = buildJsonPayload("LIST_PAPERS");
+        if (auto resp = sendRequest(payload))
         {
-            std::cout << resp->payload << '\n';
+            printResponse(*resp);
         }
         else
         {
@@ -585,7 +553,7 @@ bool Cli::handleAuthorMenuInput(const std::string& line)
         return true;
     }
 
-    return false; // 其他输入不处理，交给原有逻辑
+    return false;
 }
 
 void Cli::printReviewerNumericMenu() const
@@ -609,20 +577,16 @@ bool Cli::handleReviewerMenuInput(const std::string& line)
 
     const std::string t = trim(line);
 
-    // 如果处于向导状态，消费输入
     if (reviewerWizard_ != ReviewerWizard::None)
     {
         switch (reviewerWizard_)
         {
         case ReviewerWizard::ViewAskPaperId:
         {
-            const std::string cmd     = "GET_PAPER " + t;
-            const std::string payload = buildPayload(cmd);
-            osp::protocol::Message req{osp::protocol::MessageType::CommandRequest, payload};
-            osp::net::TcpClient tcpClient(host_, port_);
-            if (auto resp = tcpClient.request(req))
+            auto payload = buildJsonPayload("GET_PAPER " + t);
+            if (auto resp = sendRequest(payload))
             {
-                std::cout << resp->payload << '\n';
+                printResponse(*resp);
             }
             else
             {
@@ -645,13 +609,10 @@ bool Cli::handleReviewerMenuInput(const std::string& line)
         case ReviewerWizard::ReviewAskComments:
         {
             const std::string comments = t;
-            const std::string cmd      = "REVIEW " + tempPaperId_ + " " + tempDecision_ + " " + comments;
-            const std::string payload  = buildPayload(cmd);
-            osp::protocol::Message req{osp::protocol::MessageType::CommandRequest, payload};
-            osp::net::TcpClient tcpClient(host_, port_);
-            if (auto resp = tcpClient.request(req))
+            auto payload = buildJsonPayload("REVIEW " + tempPaperId_ + " " + tempDecision_ + " " + comments);
+            if (auto resp = sendRequest(payload))
             {
-                std::cout << resp->payload << '\n';
+                printResponse(*resp);
             }
             else
             {
@@ -695,16 +656,12 @@ bool Cli::handleReviewerMenuInput(const std::string& line)
         }
     }
 
-    // 非向导状态，识别数字入口
     if (t == "1")
     {
-        const std::string cmd     = "LIST_PAPERS";
-        const std::string payload = buildPayload(cmd);
-        osp::protocol::Message req{osp::protocol::MessageType::CommandRequest, payload};
-        osp::net::TcpClient tcpClient(host_, port_);
-        if (auto resp = tcpClient.request(req))
+        auto payload = buildJsonPayload("LIST_PAPERS");
+        if (auto resp = sendRequest(payload))
         {
-            std::cout << resp->payload << '\n';
+            printResponse(*resp);
         }
         else
         {
@@ -725,7 +682,7 @@ bool Cli::handleReviewerMenuInput(const std::string& line)
         return true;
     }
 
-    return false; // 其他输入不处理，交给原有逻辑
+    return false;
 }
 
 void Cli::printAdminNumericMenu() const
@@ -754,7 +711,6 @@ bool Cli::handleAdminMenuInput(const std::string& line)
 
     const std::string t = trim(line);
 
-    // 如果处于向导状态，消费输入
     if (adminWizard_ != AdminWizard::None)
     {
         switch (adminWizard_)
@@ -767,13 +723,10 @@ bool Cli::handleAdminMenuInput(const std::string& line)
         case AdminWizard::AddReviewerAskPassword:
         {
             tempPassword_ = t.empty() ? "123456" : t;
-            const std::string cmd = "MANAGE_USERS ADD " + tempUsername_ + " " + tempPassword_ + " Reviewer";
-            const std::string payload = buildPayload(cmd);
-            osp::protocol::Message req{osp::protocol::MessageType::CommandRequest, payload};
-            osp::net::TcpClient tcpClient(host_, port_);
-            if (auto resp = tcpClient.request(req))
+            auto payload = buildJsonPayload("MANAGE_USERS ADD " + tempUsername_ + " " + tempPassword_ + " Reviewer");
+            if (auto resp = sendRequest(payload))
             {
-                std::cout << resp->payload << '\n';
+                printResponse(*resp);
             }
             else
             {
@@ -785,13 +738,10 @@ bool Cli::handleAdminMenuInput(const std::string& line)
         }
         case AdminWizard::RemoveUserAskName:
         {
-            const std::string cmd = "MANAGE_USERS REMOVE " + t;
-            const std::string payload = buildPayload(cmd);
-            osp::protocol::Message req{osp::protocol::MessageType::CommandRequest, payload};
-            osp::net::TcpClient tcpClient(host_, port_);
-            if (auto resp = tcpClient.request(req))
+            auto payload = buildJsonPayload("MANAGE_USERS REMOVE " + t);
+            if (auto resp = sendRequest(payload))
             {
-                std::cout << resp->payload << '\n';
+                printResponse(*resp);
             }
             else
             {
@@ -809,13 +759,10 @@ bool Cli::handleAdminMenuInput(const std::string& line)
         case AdminWizard::UpdateRoleAskRole:
         {
             tempRole_ = t;
-            const std::string cmd = "MANAGE_USERS UPDATE_ROLE " + tempUsername_ + " " + tempRole_;
-            const std::string payload = buildPayload(cmd);
-            osp::protocol::Message req{osp::protocol::MessageType::CommandRequest, payload};
-            osp::net::TcpClient tcpClient(host_, port_);
-            if (auto resp = tcpClient.request(req))
+            auto payload = buildJsonPayload("MANAGE_USERS UPDATE_ROLE " + tempUsername_ + " " + tempRole_);
+            if (auto resp = sendRequest(payload))
             {
-                std::cout << resp->payload << '\n';
+                printResponse(*resp);
             }
             else
             {
@@ -833,13 +780,10 @@ bool Cli::handleAdminMenuInput(const std::string& line)
         case AdminWizard::ResetPwdAskNewPwd:
         {
             tempPassword_ = t;
-            const std::string cmd = "MANAGE_USERS RESET_PASSWORD " + tempUsername_ + " " + tempPassword_;
-            const std::string payload = buildPayload(cmd);
-            osp::protocol::Message req{osp::protocol::MessageType::CommandRequest, payload};
-            osp::net::TcpClient tcpClient(host_, port_);
-            if (auto resp = tcpClient.request(req))
+            auto payload = buildJsonPayload("MANAGE_USERS RESET_PASSWORD " + tempUsername_ + " " + tempPassword_);
+            if (auto resp = sendRequest(payload))
             {
-                std::cout << resp->payload << '\n';
+                printResponse(*resp);
             }
             else
             {
@@ -851,13 +795,10 @@ bool Cli::handleAdminMenuInput(const std::string& line)
         }
         case AdminWizard::BackupAskPath:
         {
-            const std::string cmd = "BACKUP " + t;
-            const std::string payload = buildPayload(cmd);
-            osp::protocol::Message req{osp::protocol::MessageType::CommandRequest, payload};
-            osp::net::TcpClient tcpClient(host_, port_);
-            if (auto resp = tcpClient.request(req))
+            auto payload = buildJsonPayload("BACKUP " + t);
+            if (auto resp = sendRequest(payload))
             {
-                std::cout << resp->payload << '\n';
+                printResponse(*resp);
             }
             else
             {
@@ -869,13 +810,10 @@ bool Cli::handleAdminMenuInput(const std::string& line)
         }
         case AdminWizard::RestoreAskPath:
         {
-            const std::string cmd = "RESTORE " + t;
-            const std::string payload = buildPayload(cmd);
-            osp::protocol::Message req{osp::protocol::MessageType::CommandRequest, payload};
-            osp::net::TcpClient tcpClient(host_, port_);
-            if (auto resp = tcpClient.request(req))
+            auto payload = buildJsonPayload("RESTORE " + t);
+            if (auto resp = sendRequest(payload))
             {
-                std::cout << resp->payload << '\n';
+                printResponse(*resp);
             }
             else
             {
@@ -979,16 +917,12 @@ bool Cli::handleAdminMenuInput(const std::string& line)
         }
     }
 
-    // 非向导状态，识别数字入口
     if (t == "1")
     {
-        const std::string cmd = "MANAGE_USERS LIST";
-        const std::string payload = buildPayload(cmd);
-        osp::protocol::Message req{osp::protocol::MessageType::CommandRequest, payload};
-        osp::net::TcpClient tcpClient(host_, port_);
-        if (auto resp = tcpClient.request(req))
+        auto payload = buildJsonPayload("MANAGE_USERS LIST");
+        if (auto resp = sendRequest(payload))
         {
-            std::cout << resp->payload << '\n';
+            printResponse(*resp);
         }
         else
         {
@@ -1034,13 +968,10 @@ bool Cli::handleAdminMenuInput(const std::string& line)
     }
     if (t == "8")
     {
-        const std::string cmd = "VIEW_SYSTEM_STATUS";
-        const std::string payload = buildPayload(cmd);
-        osp::protocol::Message req{osp::protocol::MessageType::CommandRequest, payload};
-        osp::net::TcpClient tcpClient(host_, port_);
-        if (auto resp = tcpClient.request(req))
+        auto payload = buildJsonPayload("VIEW_SYSTEM_STATUS");
+        if (auto resp = sendRequest(payload))
         {
-            std::cout << resp->payload << '\n';
+            printResponse(*resp);
         }
         else
         {
@@ -1049,7 +980,6 @@ bool Cli::handleAdminMenuInput(const std::string& line)
         return true;
     }
 
-    // 其他输入不处理，交给原有逻辑
     return false;
 }
 
@@ -1074,7 +1004,6 @@ bool Cli::handleEditorMenuInput(const std::string& line)
 
     const std::string t = trim(line);
 
-    // 如果处于向导状态，消费输入
     if (editorWizard_ != EditorWizard::None)
     {
         switch (editorWizard_)
@@ -1086,13 +1015,10 @@ bool Cli::handleEditorMenuInput(const std::string& line)
             return true;
         case EditorWizard::AssignAskReviewer:
         {
-            const std::string cmd = "ASSIGN_REVIEWER " + tempPaperId_ + " " + t;
-            const std::string payload = buildPayload(cmd);
-            osp::protocol::Message req{osp::protocol::MessageType::CommandRequest, payload};
-            osp::net::TcpClient tcpClient(host_, port_);
-            if (auto resp = tcpClient.request(req))
+            auto payload = buildJsonPayload("ASSIGN_REVIEWER " + tempPaperId_ + " " + t);
+            if (auto resp = sendRequest(payload))
             {
-                std::cout << resp->payload << '\n';
+                printResponse(*resp);
             }
             else
             {
@@ -1104,13 +1030,10 @@ bool Cli::handleEditorMenuInput(const std::string& line)
         }
         case EditorWizard::ViewAskPaperId:
         {
-            const std::string cmd = "VIEW_REVIEW_STATUS " + t;
-            const std::string payload = buildPayload(cmd);
-            osp::protocol::Message req{osp::protocol::MessageType::CommandRequest, payload};
-            osp::net::TcpClient tcpClient(host_, port_);
-            if (auto resp = tcpClient.request(req))
+            auto payload = buildJsonPayload("VIEW_REVIEW_STATUS " + t);
+            if (auto resp = sendRequest(payload))
             {
-                std::cout << resp->payload << '\n';
+                printResponse(*resp);
             }
             else
             {
@@ -1128,13 +1051,10 @@ bool Cli::handleEditorMenuInput(const std::string& line)
         case EditorWizard::DecideAskDecision:
         {
             tempDecision_ = t;
-            const std::string cmd = "MAKE_FINAL_DECISION " + tempPaperId_ + " " + tempDecision_;
-            const std::string payload = buildPayload(cmd);
-            osp::protocol::Message req{osp::protocol::MessageType::CommandRequest, payload};
-            osp::net::TcpClient tcpClient(host_, port_);
-            if (auto resp = tcpClient.request(req))
+            auto payload = buildJsonPayload("MAKE_FINAL_DECISION " + tempPaperId_ + " " + tempDecision_);
+            if (auto resp = sendRequest(payload))
             {
-                std::cout << resp->payload << '\n';
+                printResponse(*resp);
             }
             else
             {
@@ -1193,7 +1113,6 @@ bool Cli::handleEditorMenuInput(const std::string& line)
         }
     }
 
-    // 非向导状态，识别数字入口
     if (t == "1")
     {
         editorWizard_ = EditorWizard::AssignAskPaperId;
@@ -1213,9 +1132,8 @@ bool Cli::handleEditorMenuInput(const std::string& line)
         return true;
     }
 
-    return false; // 其他输入交给原有逻辑
+    return false;
 }
 
 } // namespace osp::client
-
 
