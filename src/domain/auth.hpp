@@ -6,6 +6,7 @@
 #include "common/types.hpp"
 
 #include <optional>
+#include <cstddef>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -55,6 +56,9 @@ public:
 
     // 根据会话 ID 查找已有 Session，用于后续请求的鉴权。
     std::optional<Session> validateSession(const std::string& sessionId) const;
+
+    // 当前活跃会话数（用于系统状态监控）
+    [[nodiscard]] std::size_t sessionCount() const noexcept { return sessionsById_.size(); }
 
 private:
     struct StoredUser

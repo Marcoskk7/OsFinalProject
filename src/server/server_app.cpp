@@ -12,7 +12,6 @@ namespace osp::server
 
 namespace
 {
-
 // Role 转字符串
 std::string roleToString(osp::Role role)
 {
@@ -35,11 +34,18 @@ osp::Role stringToRole(const std::string& s)
     return osp::Role::Author;
 }
 
+std::size_t clampCacheCapacity(std::size_t v)
+{
+    // 防止极端值导致内存占用过大；课程项目里给一个温和上限即可
+    constexpr std::size_t kMax = 4096;
+    if (v > kMax) return kMax;
+    return v;
+}
 } // namespace
 
-ServerApp::ServerApp(std::uint16_t port)
+ServerApp::ServerApp(std::uint16_t port, std::size_t cacheCapacity)
     : port_(port)
-    , vfs_(64) // 默认缓存容量
+    , vfs_(clampCacheCapacity(cacheCapacity))
     , auth_()
 {
     // 初始化一些内置账号，便于本地测试与演示。
@@ -55,7 +61,8 @@ void ServerApp::run()
 {
     running_.store(true);
     osp::log(osp::LogLevel::Info,
-             "Server starting on port " + std::to_string(port_));
+             "Server starting on port " + std::to_string(port_) + " (cacheCapacity="
+                 + std::to_string(vfs_.cacheCapacity()) + ")");
 
     // 挂载简化 VFS
     vfs_.mount("data.fs");
@@ -349,8 +356,9 @@ osp::protocol::Message ServerApp::handleCommand(const osp::protocol::Command&   
         }
 
         const std::size_t userCount = auth_.getAllUsers().size();
+        const std::size_t sessionCount = auth_.sessionCount();
 
-        // Papers: 通过遍历 /papers/<id>/ 目录计数
+        // Papers: 通过遍历 /papers/<id>/ 目录计数（只统计一级目录项）
         std::size_t paperCount = 0;
         auto papersListing = vfs_.listDirectory("/papers");
         if (papersListing)
@@ -366,7 +374,7 @@ osp::protocol::Message ServerApp::handleCommand(const osp::protocol::Command&   
             }
         }
 
-        // Reviews: 遍历每篇论文的 /reviews 目录
+        // Reviews: 遍历每篇论文的 /reviews 目录内文件数量
         std::size_t reviewCount = 0;
         if (papersListing)
         {
@@ -398,10 +406,19 @@ osp::protocol::Message ServerApp::handleCommand(const osp::protocol::Command&   
             }
         }
 
-        json data;
+        const auto cs = vfs_.cacheStats();
+        json       data;
         data["users"] = userCount;
+        data["sessions"] = sessionCount;
         data["papers"] = paperCount;
         data["reviews"] = reviewCount;
+        data["blockCache"] = {
+            {"capacity", cs.capacity},
+            {"entries", cs.entries},
+            {"hits", cs.hits},
+            {"misses", cs.misses},
+            {"replacements", cs.replacements}
+        };
 
         return osp::protocol::makeSuccessResponse(data);
     }

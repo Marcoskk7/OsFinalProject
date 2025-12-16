@@ -28,6 +28,9 @@ public:
     bool mount(const std::string& backingFile);
 
     [[nodiscard]] const SuperBlock& superBlock() const noexcept { return sb_; }
+    [[nodiscard]] BlockCache::Stats cacheStats() const noexcept { return cache_.stats(); }
+    [[nodiscard]] std::size_t cacheCapacity() const noexcept { return cache_.capacity(); }
+    [[nodiscard]] std::size_t cacheSize() const noexcept { return cache_.size(); }
 
     // ------------ 高层文件/目录接口（带路径解析） ------------
 

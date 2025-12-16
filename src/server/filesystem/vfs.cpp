@@ -948,6 +948,8 @@ bool Vfs::removeFile(const std::string& path)
             ino.directBlocks[i] = 0;
         }
     }
+    // 关键：将 inode 恢复为“空闲态”，便于 findFreeInode() 复用
+    ino.isDirectory = false;
     ino.size = 0;
     storeInode(ino);
 
@@ -1036,6 +1038,8 @@ bool Vfs::removeDirectory(const std::string& path)
             dir.directBlocks[i] = 0;
         }
     }
+    // 关键：将 inode 恢复为“空闲态”，否则目录 inode 会永久不可复用
+    dir.isDirectory = false;
     dir.size = 0;
     storeInode(dir);
 
