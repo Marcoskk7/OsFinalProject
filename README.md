@@ -87,8 +87,7 @@ cmake --build . --target clean
 
 ```bash
 npm install
-cd ./gateway
-node server.js
+cd ./gateway && node server.js
 ```
 ---
 

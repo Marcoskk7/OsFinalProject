@@ -1,0 +1,1005 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>OS Project UI • Admin Node</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <style>
+      /* --- Design System: Deep Nebula --- */
+      :root {
+        /* Palette */
+        --bg-deep: #030712; /* Very dark blue/black */
+        --glass-surface: rgba(17, 24, 39, 0.7);
+        --glass-border: rgba(255, 255, 255, 0.08);
+        --glass-highlight: rgba(255, 255, 255, 0.03);
+        
+        --primary: #6366f1;       /* Indigo */
+        --primary-glow: #818cf8;
+        --accent: #06b6d4;        /* Cyan */
+        --success: #10b981;       /* Emerald */
+        --warning: #f59e0b;       /* Amber */
+        --danger: #f43f5e;        /* Rose */
+        
+        --text-main: #f8fafc;
+        --text-muted: #94a3b8;
+        
+        /* Layout */
+        --radius-lg: 24px;
+        --radius-md: 12px;
+        --radius-sm: 8px;
+        
+        /* Animation */
+        --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        padding: 40px 20px;
+        background-color: var(--bg-deep);
+        font-family: 'Inter', sans-serif;
+        color: var(--text-main);
+        overflow-x: hidden;
+        /* Subtle grid background */
+        background-image: 
+          linear-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
+        background-size: 40px 40px;
+      }
+
+      /* --- Ambient Background Orbs --- */
+      .bg-element {
+        position: fixed;
+        border-radius: 50%;
+        z-index: -1;
+        filter: blur(80px);
+        animation: float 10s ease-in-out infinite;
+      }
+      .bg-1 {
+        width: 600px;
+        height: 600px;
+        background: radial-gradient(circle, rgba(99, 102, 241, 0.15) 0%, transparent 70%);
+        top: -10%;
+        right: -10%;
+        animation-delay: 0s;
+      }
+      .bg-2 {
+        width: 500px;
+        height: 500px;
+        background: radial-gradient(circle, rgba(6, 182, 212, 0.15) 0%, transparent 70%);
+        bottom: -10%;
+        left: -10%;
+        animation-delay: -5s;
+      }
+
+      @keyframes float {
+        0%, 100% { transform: translate(0, 0); }
+        50% { transform: translate(30px, -30px); }
+      }
+
+      /* --- Main Card Container --- */
+      .card {
+        width: min(1000px, 100%);
+        background: var(--glass-surface);
+        border-radius: var(--radius-lg);
+        padding: 40px;
+        box-shadow: 
+          0 0 0 1px var(--glass-border),
+          0 20px 50px -10px rgba(0, 0, 0, 0.5);
+        backdrop-filter: blur(20px);
+        -webkit-backdrop-filter: blur(20px);
+        position: relative;
+        overflow: hidden;
+        animation: slideUp 0.6s var(--ease-out);
+      }
+      
+      /* Top highlight line */
+      .card::after {
+        content: '';
+        position: absolute;
+        top: 0; left: 0; right: 0;
+        height: 1px;
+        background: linear-gradient(90deg, transparent, rgba(255,255,255,0.3), transparent);
+      }
+
+      @keyframes slideUp {
+        from { opacity: 0; transform: translateY(20px); }
+        to { opacity: 1; transform: translateY(0); }
+      }
+
+      /* --- Header Area --- */
+      .header {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        margin-bottom: 40px;
+        padding-bottom: 24px;
+        border-bottom: 1px solid var(--glass-border);
+      }
+
+      h1 {
+        margin: 0;
+        font-size: 32px;
+        font-weight: 800;
+        letter-spacing: -1px;
+        background: linear-gradient(135deg, #fff 0%, #94a3b8 100%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        text-shadow: 0 0 30px rgba(255,255,255,0.1);
+      }
+
+      .subtitle {
+        color: var(--text-muted);
+        font-size: 14px;
+        margin-top: 8px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .status-indicator {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: var(--success);
+        box-shadow: 0 0 10px var(--success);
+        display: inline-block;
+        animation: pulse 2s infinite;
+      }
+
+      /* --- Tags --- */
+      .tag-stack {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        align-items: flex-end;
+      }
+
+      .tag {
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 11px;
+        padding: 6px 12px;
+        border-radius: 20px;
+        font-weight: 600;
+        letter-spacing: 0.5px;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        text-transform: uppercase;
+        background: rgba(99, 102, 241, 0.1);
+        color: var(--primary-glow);
+        border: 1px solid rgba(99, 102, 241, 0.2);
+        box-shadow: 0 0 15px rgba(99, 102, 241, 0.05);
+      }
+
+      .tag.user-tag {
+        background: rgba(16, 185, 129, 0.1);
+        color: var(--success);
+        border-color: rgba(16, 185, 129, 0.2);
+      }
+
+      /* --- Sections & Layout --- */
+      .section {
+        margin-bottom: 32px;
+        position: relative;
+      }
+
+      .section-header {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 16px;
+        color: var(--text-muted);
+        font-weight: 700;
+        font-size: 14px;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+      }
+      .section-header i { color: var(--accent); }
+
+      .label {
+        font-family: 'Inter', sans-serif;
+        font-weight: 600;
+        color: var(--text-main);
+        font-size: 14px;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        opacity: 0.8;
+      }
+      
+      .label i { color: var(--accent); }
+
+      .row {
+        display: flex;
+        gap: 16px;
+        flex-wrap: wrap;
+      }
+
+      /* --- Inputs --- */
+      .input-with-icon {
+        position: relative;
+        flex: 1;
+        min-width: 200px;
+      }
+
+      .input-with-icon i {
+        position: absolute;
+        left: 16px;
+        top: 50%;
+        transform: translateY(-50%);
+        color: var(--text-muted);
+        transition: color 0.3s;
+        z-index: 2;
+      }
+
+      input {
+        width: 100%;
+        background: rgba(0, 0, 0, 0.3);
+        border: 1px solid var(--glass-border);
+        color: white;
+        padding: 14px 16px 14px 44px;
+        border-radius: var(--radius-md);
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 14px;
+        outline: none;
+        transition: all 0.3s ease;
+        box-sizing: border-box; /* Fix sizing */
+      }
+
+      input:focus {
+        background: rgba(0, 0, 0, 0.5);
+        border-color: var(--primary);
+        box-shadow: 0 0 0 1px var(--primary), 0 0 20px rgba(99, 102, 241, 0.1);
+      }
+      
+      input:focus + i, .input-with-icon:focus-within i {
+        color: var(--primary);
+      }
+
+      input::placeholder {
+        color: rgba(148, 163, 184, 0.4);
+      }
+
+      input:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+
+      /* --- Buttons --- */
+      button {
+        font-family: 'Inter', sans-serif;
+        font-weight: 600;
+        font-size: 14px;
+        border: none;
+        border-radius: var(--radius-md);
+        padding: 0 24px;
+        height: 48px;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        transition: all 0.3s var(--ease-out);
+        position: relative;
+        overflow: hidden;
+        color: white;
+        background: var(--glass-highlight);
+        border: 1px solid var(--glass-border);
+      }
+
+      /* Base Button (Primary-ish) */
+      #send {
+        background: linear-gradient(135deg, var(--primary), #4338ca);
+        box-shadow: 0 4px 15px rgba(99, 102, 241, 0.3);
+        border: none;
+      }
+      
+      /* Status Buttons */
+      button.success {
+        background: rgba(16, 185, 129, 0.15);
+        color: var(--success);
+        border-color: rgba(16, 185, 129, 0.3);
+      }
+      
+      button.warning {
+        background: rgba(245, 158, 11, 0.15);
+        color: var(--warning);
+        border-color: rgba(245, 158, 11, 0.3);
+      }
+      
+      button.danger {
+        background: rgba(244, 63, 94, 0.15);
+        color: var(--danger);
+        border-color: rgba(244, 63, 94, 0.3);
+      }
+
+      button.secondary {
+        background: transparent;
+        color: var(--text-muted);
+        border: 1px dashed var(--glass-border);
+      }
+
+      /* Button Hover Effects */
+      button:hover {
+        transform: translateY(-2px);
+      }
+      
+      button:active {
+        transform: translateY(0);
+      }
+
+      #send:hover {
+        box-shadow: 0 8px 25px rgba(99, 102, 241, 0.5);
+      }
+      
+      button.success:hover {
+        background: rgba(16, 185, 129, 0.25);
+        box-shadow: 0 0 15px rgba(16, 185, 129, 0.2);
+      }
+
+      button.danger:hover {
+        background: rgba(244, 63, 94, 0.25);
+        box-shadow: 0 0 15px rgba(244, 63, 94, 0.2);
+      }
+      
+      button.warning:hover {
+         background: rgba(245, 158, 11, 0.25);
+         box-shadow: 0 0 15px rgba(245, 158, 11, 0.2);
+      }
+
+      button.secondary:hover {
+        color: var(--text-main);
+        border-color: var(--text-muted);
+        background: rgba(255,255,255,0.05);
+      }
+
+      /* --- Quick Commands --- */
+      .quick-commands {
+        margin-top: 16px;
+        background: rgba(0,0,0,0.2);
+        padding: 12px;
+        border-radius: var(--radius-sm);
+        border: 1px solid var(--glass-border);
+      }
+
+      .quick-commands span {
+        font-size: 12px;
+        color: var(--text-muted);
+        font-weight: 600;
+        margin-right: 8px;
+      }
+
+      .quick-command {
+        background: rgba(255, 255, 255, 0.05);
+        color: var(--text-muted);
+        border: 1px solid transparent;
+        padding: 6px 12px;
+        font-size: 11px;
+        font-family: 'JetBrains Mono', monospace;
+        height: auto;
+        min-height: 28px;
+        border-radius: 4px;
+      }
+
+      .quick-command:hover {
+        background: rgba(255, 255, 255, 0.1);
+        color: var(--primary-glow);
+        transform: none;
+        border-color: rgba(99, 102, 241, 0.3);
+      }
+      
+      /* --- Help List Grid --- */
+      #help-list > div {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+        gap: 8px;
+        margin-top: 12px;
+      }
+
+      /* --- Papers Panel (Explorer) --- */
+      .papers-panel {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+        gap: 16px;
+        margin-top: 16px;
+        padding: 4px;
+      }
+
+      .paper-item {
+        background: linear-gradient(180deg, rgba(255,255,255,0.05) 0%, rgba(255,255,255,0.02) 100%);
+        border: 1px solid var(--glass-border);
+        border-radius: var(--radius-md);
+        padding: 16px;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        transition: all 0.2s;
+        cursor: default;
+      }
+      
+      .paper-item:hover {
+        border-color: rgba(99, 102, 241, 0.4);
+        box-shadow: 0 4px 20px rgba(0,0,0,0.2);
+      }
+
+      .paper-meta {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+      }
+
+      .paper-id {
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 12px;
+        color: var(--text-muted);
+      }
+
+      .paper-status {
+        font-size: 10px;
+        text-transform: uppercase;
+        padding: 2px 6px;
+        border-radius: 4px;
+        background: rgba(16, 185, 129, 0.1);
+        color: var(--success);
+        font-weight: 700;
+        letter-spacing: 0.5px;
+      }
+
+      .paper-title {
+        color: var(--text-main);
+        font-size: 14px;
+        font-weight: 500;
+        line-height: 1.4;
+      }
+      
+      .papers-empty {
+        color: var(--text-muted);
+        text-align: center;
+        padding: 20px;
+        font-style: italic;
+        background: rgba(255,255,255,0.02);
+        border-radius: var(--radius-md);
+      }
+
+      /* --- Output Console --- */
+      .output-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 8px;
+        padding: 0 4px;
+      }
+
+      #output {
+        background: #080b13;
+        color: var(--text-main);
+        border-radius: var(--radius-md);
+        padding: 18px;
+        font-family: 'JetBrains Mono', monospace;
+        line-height: 1.6;
+        border: 1px solid var(--glass-border);
+        box-shadow: inset 0 2px 10px rgba(0,0,0,0.5);
+        min-height: 250px;
+        max-height: 400px;
+        overflow-y: auto;
+      }
+
+      /* Console Scrollbar */
+      #output::-webkit-scrollbar { width: 8px; }
+      #output::-webkit-scrollbar-track { background: #09090b; }
+      #output::-webkit-scrollbar-thumb { background: #3f3f46; border-radius: 4px; }
+      #output::-webkit-scrollbar-thumb:hover { background: #52525b; }
+
+      /* Console Text Coloring (Simulated via span injection in JS, 
+         but here we style the container defaults) */
+      /* Match other pages: no prefix line in logs */
+
+      .copy-btn {
+        background: transparent;
+        color: var(--text-muted);
+        border: 1px solid var(--glass-border);
+        padding: 6px 12px;
+        font-size: 11px;
+        border-radius: 6px;
+        transition: all 0.2s;
+        height: auto;
+      }
+      
+      .copy-btn:hover {
+        background: rgba(255,255,255,0.1);
+        color: white;
+      }
+
+      /* --- Notification Toast --- */
+      .notification {
+        position: fixed;
+        top: 24px;
+        right: 24px;
+        background: #1e1e24;
+        color: white;
+        padding: 16px 24px;
+        border-radius: 12px;
+        box-shadow: 0 15px 40px rgba(0, 0, 0, 0.4);
+        display: flex;
+        align-items: center;
+        gap: 16px;
+        z-index: 1000;
+        transform: translateX(150%);
+        transition: transform 0.5s cubic-bezier(0.68, -0.55, 0.265, 1.55);
+        border: 1px solid var(--glass-border);
+        min-width: 300px;
+      }
+
+      .notification.show { transform: translateX(0); }
+      .notification i { font-size: 20px; }
+      .notification p { margin: 0; font-size: 14px; font-weight: 500; }
+
+      /* --- Responsive --- */
+      @media (min-width: 769px) {
+        .row { flex-wrap: nowrap; }
+        .section:nth-child(2) .row .input-with-icon { flex: 2; }
+        .section:nth-child(3) .row .input-with-icon { flex: 3; }
+        .section:nth-child(4) .row .input-with-icon { flex: 4; }
+      }
+
+      @media (max-width: 768px) {
+        .card { padding: 24px 20px; width: 100%; border-radius: 0; border: none; min-height: 100vh; }
+        .header { flex-direction: column; gap: 16px; }
+        .tag-stack { flex-direction: row; width: 100%; justify-content: space-between; }
+        .row { flex-direction: column; }
+        input, button { width: 100%; }
+        h1 { font-size: 24px; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="bg-element bg-1"></div>
+    <div class="bg-element bg-2"></div>
+
+    <div class="notification" id="notification">
+      <i class="fas fa-check-circle"></i>
+      <p id="notification-text">Operation completed successfully</p>
+    </div>
+
+    <div class="card">
+      <div class="header">
+        <div>
+          <h1>Admin Control Node</h1>
+          <p class="subtitle">
+             <i class="fas fa-network-wired"></i> System Operations & User Oversight 
+             <span class="status-indicator"></span>
+          </p>
+        </div>
+        <div class="tag-stack">
+          <div class="tag">
+            <i class="fas fa-shield-alt"></i>
+            Encrypted
+          </div>
+          <div class="tag user-tag">
+            <i class="fas fa-user-astronaut"></i>
+            <span id="current-user">Guest</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-header">
+          <div class="label">
+            <i class="fas fa-server"></i>
+            Connectivity
+          </div>
+        </div>
+        <div class="row">
+          <button id="ping" class="success">
+            <i class="fas fa-satellite-dish"></i>
+            Ping Server
+          </button>
+          <button id="health" class="warning">
+            <i class="fas fa-heartbeat"></i>
+            Health Diagnostics
+          </button>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-header">
+          <div class="label">
+            <i class="fas fa-fingerprint"></i>
+            Session
+          </div>
+        </div>
+        <div class="row">
+          <div class="input-with-icon">
+            <i class="fas fa-key"></i>
+            <input id="session" placeholder="Session Token..." />
+          </div>
+          <button id="logout" class="danger">
+            <i class="fas fa-power-off"></i>
+            Logout
+          </button>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-header">
+          <div class="label">
+            <i class="fas fa-terminal"></i>
+            Command Line Interface
+          </div>
+        </div>
+        <div class="row">
+          <div class="input-with-icon">
+            <i class="fas fa-code"></i>
+            <input id="command" value="VIEW_SYSTEM_STATUS" placeholder="Enter system command..." />
+          </div>
+          <button id="send">
+            <i class="fas fa-play"></i>
+            Execute
+          </button>
+          <button id="clear-command" class="secondary">
+            <i class="fas fa-eraser"></i>
+            Clear
+          </button>
+        </div>
+        
+        <div class="quick-commands" id="help-commands">
+          <div style="display:flex; align-items:center; justify-content:space-between; width:100%; margin-bottom:8px;">
+            <span><i class="fas fa-book"></i> AVAILABLE DIRECTIVES</span>
+            <button id="toggle-help" class="copy-btn" data-open="false">Show All</button>
+          </div>
+          <div id="help-list" style="display:none; width:100%;">
+            </div>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-header">
+          <div class="label">
+            <i class="fas fa-database"></i>
+            Paper Registry
+          </div>
+        </div>
+        <div class="row">
+          <button id="list-papers" class="secondary" style="width: 100%">
+            <i class="fas fa-list"></i>
+            Load Registry
+          </button>
+        </div>
+        <div id="papers-panel" class="papers-panel"></div>
+      </div>
+
+      <div class="section">
+        <div class="output-header">
+          <div class="section-header" style="margin:0; border:none; padding:0">
+            <i class="fas fa-desktop"></i>
+            System Logs
+          </div>
+          <button class="copy-btn" id="copy-output">
+            <i class="fas fa-copy" aria-hidden="true"></i>
+            <span>Copy Log</span>
+          </button>
+        </div>
+        <pre id="output">Initializing OS Admin Protocol v2.4...
+> Secure connection established.
+> Waiting for input...</pre>
+      </div>
+    </div>
+
+    <script>
+      /* * LOGIC REMAINS EXACTLY THE SAME 
+       * Only styling strings in setOutput/renderPapersList might visually benefit from the CSS changes 
+       */
+      const $ = (sel) => document.querySelector(sel);
+      const $$ = (sel) => document.querySelectorAll(sel);
+
+      const notification = $('#notification');
+      const notificationText = $('#notification-text');
+      const currentUserLabel = $('#current-user');
+      const logoutBtn = $('#logout');
+      const listPapersBtn = $('#list-papers');
+      const papersPanel = $('#papers-panel');
+      let loggedInUser = '';
+      let papersVisible = false;
+      const roleLabel = 'Admin';
+
+      const showNotification = (message, type = 'success') => {
+        // Updated icons for new theme
+        const icons = { success: 'fa-check-circle', error: 'fa-radiation', warning: 'fa-exclamation-triangle', info: 'fa-info-circle' };
+        notification.querySelector('i').className = `fas ${icons[type] || icons.info}`;
+        notificationText.textContent = message;
+        // Using CSS var for border color logic
+        const colorVar = type === 'error' ? '--danger' : type === 'warning' ? '--warning' : '--success';
+        notification.style.borderColor = `var(${colorVar})`;
+        notification.classList.add('show');
+        setTimeout(() => { notification.classList.remove('show'); }, 3000);
+      };
+
+      const setOutput = (text, type = 'info') => {
+        const output = $('#output');
+        const timestamp = new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit', second:'2-digit'});
+        // Modified styling for the dark theme log
+        const prefix = type === 'error' ? '[ERR]' : type === 'success' ? '[OK]' : '[INF]';
+        let color = '#94a3b8'; // default muted
+        if (type === 'error') color = '#f43f5e'; // rose
+        if (type === 'success') color = '#10b981'; // emerald
+        if (type === 'warning') color = '#f59e0b'; // amber
+        
+        const newLine = `${prefix} ${timestamp} >> ${text}\n`;
+        output.innerHTML = `<span style="color:${color}; display:block; border-left:2px solid ${color}; padding-left:10px; margin-bottom:4px;">${newLine}</span>` + output.innerHTML;
+        const lines = output.innerHTML.split('\n');
+        // Keep buffer manageable
+        if (output.children.length > 50) {
+            output.removeChild(output.lastChild);
+        }
+      };
+
+      const api = async (path, body) => {
+        try {
+          const res = await fetch(path, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body || {}),
+          });
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          return await res.json();
+        } catch (error) {
+          setOutput(`API Error: ${error.message}`, 'error');
+          showNotification('Connection failed', 'error');
+          return { ok: false, error: error.message };
+        }
+      };
+
+      const getForm = () => ({
+        sessionId: $('#session').value.trim(),
+        command: $('#command').value,
+      });
+
+      const setSession = (id) => {
+        const sessionInput = $('#session');
+        sessionInput.value = id;
+        if (id) {
+          showNotification('Session ID Sync Complete', 'success');
+        }
+      };
+
+      const setLoginState = (isLoggedIn, username = '') => {
+        loggedInUser = isLoggedIn ? username : '';
+        currentUserLabel.textContent = isLoggedIn ? username : 'Guest';
+      };
+
+      const renderPapersList = (payload) => {
+        papersPanel.innerHTML = '';
+        if (!payload || !payload.trim() || /No papers/i.test(payload)) {
+          const empty = document.createElement('div');
+          empty.className = 'papers-empty';
+          empty.innerHTML = '<i class="fas fa-folder-open" style="margin-right:8px"></i> Registry is empty.';
+          papersPanel.appendChild(empty);
+          return;
+        }
+        const lines = payload.split(/\n+/).map(l => l.trim()).filter(Boolean);
+        if (!lines.length) {
+          const empty = document.createElement('div');
+          empty.className = 'papers-empty';
+          empty.textContent = 'No papers found.';
+          papersPanel.appendChild(empty);
+          return;
+        }
+        lines.forEach(line => {
+          const m = line.match(/\[ID:\s*(\d+)\]\s*(.*?)\s*\(Status:\s*([^)]*)\)/i);
+          const card = document.createElement('div');
+          card.className = 'paper-item';
+          const meta = document.createElement('div');
+          meta.className = 'paper-meta';
+          const idSpan = document.createElement('span');
+          idSpan.className = 'paper-id';
+          idSpan.innerHTML = `<i class="fas fa-hashtag"></i> ${m ? m[1] : '—'}`;
+          const status = document.createElement('span');
+          status.className = 'paper-status';
+          status.textContent = m ? m[3] : 'Unknown';
+          
+          // Colorize status
+          if(m && /accept/i.test(m[3])) status.style.color = 'var(--success)';
+          if(m && /reject/i.test(m[3])) status.style.color = 'var(--danger)';
+          if(m && /pending/i.test(m[3])) status.style.color = 'var(--warning)';
+
+          meta.appendChild(idSpan);
+          meta.appendChild(status);
+          const title = document.createElement('div');
+          title.className = 'paper-title';
+          title.textContent = m ? m[2] : line;
+          card.appendChild(meta);
+          card.appendChild(title);
+          papersPanel.appendChild(card);
+        });
+      };
+
+      const handlePing = async () => {
+        setOutput('Pinging server...', 'info');
+        const r = await api('/api/ping');
+        if (r.ok) {
+          setOutput(`Server response: ${JSON.stringify(r, null, 2)}`, 'success');
+          showNotification('Server Online', 'success');
+        }
+      };
+
+      const handleHealth = async () => {
+        setOutput('Running system diagnostics...', 'info');
+        const r = await api('/api/health');
+        if (r.ok) {
+          setOutput(`Health status: ${JSON.stringify(r, null, 2)}`, 'success');
+          showNotification('System Health 100%', 'success');
+        }
+      };
+
+      const handleLogout = () => {
+        setOutput(`User ${loggedInUser} disconnected.`, 'info');
+        localStorage.removeItem('sessionId');
+        localStorage.removeItem('username');
+        localStorage.removeItem('role');
+        setLoginState(false);
+        showNotification('Session Terminated', 'info');
+        window.location.href = 'login.html';
+      };
+
+      const handleCommand = async () => {
+        const { command, sessionId } = getForm();
+        if (!command.trim()) {
+          setOutput('Input empty. Enter directive.', 'error');
+          showNotification('Command required', 'error');
+          return;
+        }
+        setOutput(`Executing: ${command}`, 'info');
+        const r = await api('/api/command', { command, sessionId: sessionId || undefined });
+        if (r.ok) {
+          setOutput(`Response: ${JSON.stringify(r, null, 2)}`, 'success');
+          showNotification('Execution Successful', 'success');
+        } else {
+          setOutput(`Error: ${JSON.stringify(r, null, 2)}`, 'error');
+        }
+      };
+
+      const handleListPapers = async () => {
+        if (papersVisible) {
+          papersPanel.innerHTML = '';
+          papersPanel.style.display = 'none';
+          listPapersBtn.innerHTML = '<i class="fas fa-list"></i> Load Registry';
+          papersVisible = false;
+          return;
+        }
+        const sessionId = $('#session').value.trim();
+        if (!sessionId) {
+          setOutput('Access Denied: Login required.', 'error');
+          showNotification('Authentication Required', 'error');
+          return;
+        }
+        setOutput('Fetching registry data...', 'info');
+        const r = await api('/api/command', { command: 'LIST_PAPERS', sessionId });
+        if (r.ok && typeof r.payload === 'string') {
+          renderPapersList(r.payload);
+          papersPanel.style.display = 'grid';
+          listPapersBtn.innerHTML = '<i class="fas fa-eye-slash"></i> Hide Registry';
+          papersVisible = true;
+          setOutput(`Data Received:\n${r.payload}`, 'success');
+          showNotification('Data Loaded', 'success');
+        } else {
+          setOutput(`Fetch Failed: ${JSON.stringify(r, null, 2)}`, 'error');
+          showNotification('Fetch Failed', 'error');
+        }
+      };
+
+      const executeNow = async (cmd) => {
+        const sessionId = $('#session').value.trim();
+        if (!sessionId) {
+          setOutput('Access Denied. Please login.', 'error');
+          showNotification('Login Required', 'error');
+          return;
+        }
+        if (/^BACKUP\b/i.test(cmd)) {
+          const ok = confirm('Initiate system backup immediately?');
+          if (!ok) return;
+        }
+        if (/^LIST_PAPERS\b/i.test(cmd)) {
+          await handleListPapers();
+          return;
+        }
+        setOutput(`Executing (ADMIN override): ${cmd}`, 'info');
+        const r = await api('/api/command', { command: cmd, sessionId });
+        if (r.ok) {
+          setOutput(`Response: ${JSON.stringify(r, null, 2)}`, 'success');
+          showNotification('Override Successful', 'success');
+        } else {
+          setOutput(`Error: ${JSON.stringify(r, null, 2)}`, 'error');
+          showNotification('Override Failed', 'error');
+        }
+      };
+
+      const helpItems = [
+        { cmd: 'PING' },
+        { cmd: 'VIEW_SYSTEM_STATUS' },
+        { cmd: 'LIST_PAPERS' },
+        { cmd: 'MANAGE_USERS LIST' },
+        { cmd: 'BACKUP /tmp/backup' },
+      ];
+
+      const renderHelpList = () => {
+        const container = document.createElement('div');
+        // Grid layout handled in CSS now
+        helpItems.forEach(item => {
+          const btn = document.createElement('button');
+          btn.className = 'quick-command';
+          btn.style.justifyContent = 'space-between';
+          btn.textContent = item.cmd;
+          btn.addEventListener('click', () => {
+            $('#command').value = item.cmd;
+            $('#command').focus();
+          });
+          container.appendChild(btn);
+        });
+        return container;
+      };
+
+      $('#copy-output').addEventListener('click', () => {
+        const outputText = $('#output').textContent;
+        navigator.clipboard.writeText(outputText).then(() => {
+          showNotification('Log copied to clipboard', 'success');
+        });
+      });
+
+      $('#clear-command').addEventListener('click', () => {
+        $('#command').value = '';
+        $('#command').focus();
+      });
+
+      const helpListHost = $('#help-list');
+      const helpToggle = $('#toggle-help');
+      const helpGrid = renderHelpList();
+      if (helpListHost && helpToggle) {
+        helpListHost.appendChild(helpGrid);
+        helpToggle.addEventListener('click', () => {
+          const isOpen = helpToggle.dataset.open === 'true';
+          helpToggle.dataset.open = (!isOpen).toString();
+          helpToggle.innerHTML = isOpen ? 'Show All' : 'Hide';
+          helpListHost.style.display = isOpen ? 'none' : 'block';
+        });
+      }
+
+      $('#command').addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') handleCommand();
+      });
+
+      window.addEventListener('DOMContentLoaded', () => {
+        const savedSession = localStorage.getItem('sessionId');
+        if (!savedSession) {
+          // In a real app we might redirect, but for UI dev we keep it on page if strictly needed
+          // window.location.href = 'login.html';
+        }
+        if(savedSession) setSession(savedSession);
+        const savedUser = localStorage.getItem('username') || '';
+        setLoginState(!!savedSession, savedUser);
+
+        $('#ping').addEventListener('click', handlePing);
+        $('#health').addEventListener('click', handleHealth);
+        $('#logout').addEventListener('click', handleLogout);
+        $('#send').addEventListener('click', handleCommand);
+        listPapersBtn.addEventListener('click', handleListPapers);
+
+        papersPanel.style.display = 'none';
+        listPapersBtn.innerHTML = '<i class="fas fa-list"></i> Load Registry';
+
+        $('#command').focus();
+        setTimeout(() => { showNotification(`${roleLabel} node initialized`, 'success'); }, 600);
+      });
+    </script>
+  </body>
+</html>

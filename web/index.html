@@ -390,6 +390,60 @@
         font-weight: 500;
       }
 
+      /* Papers explorer */
+      .papers-panel {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+        gap: 12px;
+        margin-top: 12px;
+      }
+
+      .paper-item {
+        border: 1px solid rgba(99, 102, 241, 0.18);
+        border-radius: 10px;
+        padding: 12px 14px;
+        background: rgba(255, 255, 255, 0.9);
+        box-shadow: 0 4px 10px rgba(0, 0, 0, 0.05);
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+
+      .paper-meta {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        font-size: 13px;
+        color: var(--text-secondary);
+      }
+
+      .paper-id {
+        font-weight: 700;
+        color: var(--primary-dark);
+      }
+
+      .paper-status {
+        padding: 2px 8px;
+        border-radius: 12px;
+        font-size: 12px;
+        border: 1px solid rgba(99, 102, 241, 0.2);
+        color: var(--primary);
+        background: rgba(99, 102, 241, 0.08);
+      }
+
+      .paper-title {
+        font-weight: 600;
+        color: var(--text-primary);
+        font-size: 15px;
+        line-height: 1.4;
+        word-break: break-word;
+      }
+
+      .papers-empty {
+        color: var(--text-secondary);
+        font-style: italic;
+      }
+
       /* 响应式布局修复 */
       @media (min-width: 769px) {
         .row {
@@ -506,28 +560,7 @@
         </div>
       </div>
 
-      <div class="section">
-        <div class="section-header">
-          <div class="label">
-            <i class="fas fa-user-lock"></i>
-            Authentication
-          </div>
-        </div>
-        <div class="row">
-          <div class="input-with-icon">
-            <i class="fas fa-user"></i>
-            <input id="username" value="admin" placeholder="Username" />
-          </div>
-          <div class="input-with-icon">
-            <i class="fas fa-key"></i>
-            <input id="password" type="password" value="admin" placeholder="Password" />
-          </div>
-          <button id="login">
-            <i class="fas fa-sign-in-alt"></i>
-            Login
-          </button>
-        </div>
-      </div>
+      <!-- Authentication section is removed as per user request -->
 
       <div class="section">
         <div class="section-header">
@@ -541,13 +574,9 @@
             <i class="fas fa-hashtag"></i>
             <input id="session" placeholder="Session ID (auto-filled after login)" />
           </div>
-          <button id="refresh-session" class="warning">
-            <i class="fas fa-sync-alt"></i>
-            Refresh
-          </button>
-          <button id="clear-session" class="danger">
-            <i class="fas fa-trash-alt"></i>
-            Clear
+          <button id="logout" class="danger">
+            <i class="fas fa-sign-out-alt"></i>
+            Logout
           </button>
         </div>
       </div>
@@ -583,6 +612,22 @@
       </div>
 
       <div class="section">
+        <div class="section-header">
+          <div class="label">
+            <i class="fas fa-folder-open"></i>
+            Papers Explorer (Admin/Editor/Author scoped)
+          </div>
+        </div>
+        <div class="row">
+          <button id="list-papers" class="secondary">
+            <i class="fas fa-list"></i>
+            List Papers
+          </button>
+        </div>
+        <div id="papers-panel" class="papers-panel"></div>
+      </div>
+
+      <div class="section">
         <div class="output-header">
           <div class="label">
             <i class="fas fa-terminal"></i>
@@ -607,10 +652,11 @@
       const notification = $('#notification');
       const notificationText = $('#notification-text');
       const currentUserLabel = $('#current-user');
-      const loginBtn = $('#login');
-      const usernameInput = $('#username');
-      const passwordInput = $('#password');
+      const logoutBtn = $('#logout');
+      const listPapersBtn = $('#list-papers');
+      const papersPanel = $('#papers-panel');
       let loggedInUser = '';
+      let papersVisible = false;
       
       const showNotification = (message, type = 'success') => {
         const icons = {
@@ -672,8 +718,6 @@
 
       // Form data getter
       const getForm = () => ({
-        username: $('#username').value,
-        password: $('#password').value,
         sessionId: $('#session').value.trim(),
         command: $('#command').value,
       });
@@ -697,18 +741,55 @@
       const setLoginState = (isLoggedIn, username = '') => {
         loggedInUser = isLoggedIn ? username : '';
         currentUserLabel.textContent = isLoggedIn ? username : 'Not logged in';
-        loginBtn.classList.remove('danger');
-        loginBtn.textContent = isLoggedIn ? 'Logout' : 'Login';
-        if (isLoggedIn) {
-          loginBtn.classList.add('danger');
-          loginBtn.innerHTML = '<i class="fas fa-sign-out-alt"></i> Logout';
-          usernameInput.disabled = true;
-          passwordInput.disabled = true;
-        } else {
-          loginBtn.innerHTML = '<i class="fas fa-sign-in-alt"></i> Login';
-          usernameInput.disabled = false;
-          passwordInput.disabled = false;
+      };
+
+      const renderPapersList = (payload) => {
+        papersPanel.innerHTML = '';
+
+        if (!payload || !payload.trim() || /No papers/i.test(payload)) {
+          const empty = document.createElement('div');
+          empty.className = 'papers-empty';
+          empty.textContent = 'No papers found.';
+          papersPanel.appendChild(empty);
+          return;
         }
+
+        const lines = payload.split(/\n+/).map(l => l.trim()).filter(Boolean);
+        if (!lines.length) {
+          const empty = document.createElement('div');
+          empty.className = 'papers-empty';
+          empty.textContent = 'No papers found.';
+          papersPanel.appendChild(empty);
+          return;
+        }
+
+        lines.forEach(line => {
+          const m = line.match(/\[ID:\s*(\d+)\]\s*(.*?)\s*\(Status:\s*([^)]*)\)/i);
+          const card = document.createElement('div');
+          card.className = 'paper-item';
+
+          const meta = document.createElement('div');
+          meta.className = 'paper-meta';
+
+          const idSpan = document.createElement('span');
+          idSpan.className = 'paper-id';
+          idSpan.textContent = m ? `#${m[1]}` : '—';
+
+          const status = document.createElement('span');
+          status.className = 'paper-status';
+          status.textContent = m ? m[3] : 'Unknown';
+
+          meta.appendChild(idSpan);
+          meta.appendChild(status);
+
+          const title = document.createElement('div');
+          title.className = 'paper-title';
+          title.textContent = m ? m[2] : line;
+
+          card.appendChild(meta);
+          card.appendChild(title);
+          papersPanel.appendChild(card);
+        });
       };
 
       // Ping handler
@@ -731,36 +812,14 @@
         }
       };
 
-      // Login handler
-      const handleLogin = async () => {
-        if (loggedInUser) {
-          setOutput(`Logged out user ${loggedInUser}`, 'info');
-          setSession('');
-          setLoginState(false);
-          showNotification('Logged out', 'info');
-          return;
-        }
-
-        const { username, password } = getForm();
-        if (!username || !password) {
-          setOutput('Please enter both username and password', 'error');
-          showNotification('Missing credentials', 'error');
-          return;
-        }
-        
-        setOutput(`Attempting login as ${username}...`, 'info');
-        const r = await api('/api/login', { username, password });
-        
-        if (r.ok && typeof r.payload === 'string') {
-          setOutput(`Login successful: ${r.payload}`, 'success');
-          const m = r.payload.match(/SESSION\s+(\S+)/i);
-          if (m) setSession(m[1]);
-          setLoginState(true, username);
-          showNotification('Login successful', 'success');
-        } else {
-          setOutput(`Login failed: ${JSON.stringify(r, null, 2)}`, 'error');
-          showNotification('Login failed', 'error');
-        }
+      // Logout handler
+      const handleLogout = () => {
+        setOutput(`Logged out user ${loggedInUser}`, 'info');
+        localStorage.removeItem('sessionId');
+        localStorage.removeItem('username');
+        setLoginState(false);
+        showNotification('Logged out', 'info');
+        window.location.href = 'login.html';
       };
 
       // Command handler
@@ -786,6 +845,39 @@
         }
       };
 
+      // List papers handler with toggle show/hide
+      const handleListPapers = async () => {
+        // Toggle: if currently visible, collapse
+        if (papersVisible) {
+          papersPanel.innerHTML = '';
+          papersPanel.style.display = 'none';
+          listPapersBtn.innerHTML = '<i class="fas fa-list"></i> List Papers';
+          papersVisible = false;
+          return;
+        }
+
+        const sessionId = $('#session').value.trim();
+        if (!sessionId) {
+          setOutput('Login required to list papers', 'error');
+          showNotification('Please login first', 'error');
+          return;
+        }
+
+        setOutput('Listing papers...', 'info');
+        const r = await api('/api/command', { command: 'LIST_PAPERS', sessionId });
+        if (r.ok && typeof r.payload === 'string') {
+          renderPapersList(r.payload);
+          papersPanel.style.display = 'grid';
+          listPapersBtn.innerHTML = '<i class="fas fa-folder"></i> Hide Papers';
+          papersVisible = true;
+          setOutput(`LIST_PAPERS response:\n${r.payload}`, 'success');
+          showNotification('Papers fetched', 'success');
+        } else {
+          setOutput(`LIST_PAPERS failed: ${JSON.stringify(r, null, 2)}`, 'error');
+          showNotification('Failed to list papers', 'error');
+        }
+      };
+
       // Copy output to clipboard
       $('#copy-output').addEventListener('click', () => {
         const outputText = $('#output').textContent;
@@ -794,31 +886,15 @@
         });
       });
 
-      // Clear session
-      $('#clear-session').addEventListener('click', () => {
-        $('#session').value = '';
-        setOutput('Session cleared', 'warning');
-        showNotification('Session cleared', 'warning');
-      });
-
       // Clear command
       $('#clear-command').addEventListener('click', () => {
         $('#command').value = '';
         $('#command').focus();
       });
 
-      // Refresh session
-      $('#refresh-session').addEventListener('click', () => {
-        const sessionId = $('#session').value;
-        if (sessionId) {
-          setOutput(`Refreshing session ${sessionId}...`, 'info');
-          showNotification('Session refresh requested', 'info');
-        } else {
-          setOutput('No active session to refresh', 'warning');
-        }
-      });
+      // (refresh/clear session controls removed from UI)
 
-      // Quick command buttons
+      // Quick command buttons (fill input only; user will click Execute)
       $$('.quick-command').forEach(btn => {
         btn.addEventListener('click', () => {
           $('#command').value = btn.dataset.command;
@@ -833,15 +909,32 @@
 
       // Initialize
       window.addEventListener('DOMContentLoaded', () => {
+        // Require login: if no session stored, redirect to login page
+        const savedSession = localStorage.getItem('sessionId');
+        if (!savedSession) {
+          // Not logged in -> go to login page
+          window.location.href = 'login.html';
+          return;
+        }
+
+        // Restore session info in UI
+        setSession(savedSession);
+        const savedUser = localStorage.getItem('username') || '';
+        setLoginState(!!savedSession, savedUser);
+
         $('#ping').addEventListener('click', handlePing);
         $('#health').addEventListener('click', handleHealth);
-        $('#login').addEventListener('click', handleLogin);
+        $('#logout').addEventListener('click', handleLogout);
         $('#send').addEventListener('click', handleCommand);
-        setLoginState(false);
-        
+        listPapersBtn.addEventListener('click', handleListPapers);
+
+        // initial collapse state
+        papersPanel.style.display = 'none';
+        listPapersBtn.innerHTML = '<i class="fas fa-list"></i> List Papers';
+
         // Focus on command input
         $('#command').focus();
-        
+
         // Show welcome notification
         setTimeout(() => {
           showNotification('Control panel initialized and ready', 'success');
