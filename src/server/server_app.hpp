@@ -11,6 +11,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <mutex>
 #include <optional>
 #include <string>
 
@@ -18,13 +19,19 @@ namespace osp::server
 {
 
 // 负责加载文件系统、处理客户端请求的服务器核心类
+// 支持多线程并发处理客户端请求
 class ServerApp
 {
 public:
-    explicit ServerApp(std::uint16_t port, std::size_t cacheCapacity = 64);
+    explicit ServerApp(std::uint16_t port,
+                       std::size_t   cacheCapacity = 64,
+                       std::size_t   threadPoolSize = 4);
 
-    void run();    // 后续可改为事件循环
+    void run();    // 启动服务器（阻塞）
     void stop();   // 停止服务器
+
+    // 获取配置信息
+    [[nodiscard]] std::size_t threadPoolSize() const noexcept { return threadPoolSize_; }
 
 private:
     osp::protocol::Message handleRequest(const osp::protocol::Message& req);
@@ -48,11 +55,14 @@ private:
     std::uint32_t nextPaperId();
 
     std::uint16_t            port_{};
+    std::size_t              threadPoolSize_{};
     std::atomic<bool>        running_{false};
     osp::fs::Vfs             vfs_;
     osp::domain::AuthService auth_; // 认证与会话管理
+
+    // 互斥锁保护共享资源
+    mutable std::mutex vfsMutex_;   // 保护 VFS 访问
+    mutable std::mutex authMutex_;  // 保护 AuthService 访问
 };
 
 } // namespace osp::server
-
-
