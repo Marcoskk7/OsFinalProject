@@ -1,7 +1,3 @@
-好的，我已经为您将报告翻译为正式的学术英语风格，同时严格保留了原始的图片路径和引用格式。
-
----
-
 # Course Project Report: Simplified Academic Review System (SARS)
 
 ---
