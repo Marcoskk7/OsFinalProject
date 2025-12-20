@@ -54,6 +54,9 @@ private:
     // 辅助函数：获取并自增下一个 Paper ID
     std::uint32_t nextPaperId();
 
+    // 初始化 AuthService 的 VFS 操作接口
+    void initAuthVfsOperations();
+
     std::uint16_t            port_{};
     std::size_t              threadPoolSize_{};
     std::atomic<bool>        running_{false};

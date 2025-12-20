@@ -49,13 +49,7 @@ ServerApp::ServerApp(std::uint16_t port, std::size_t cacheCapacity, std::size_t 
     , vfs_(clampCacheCapacity(cacheCapacity))
     , auth_()
 {
-    // 初始化一些内置账号，便于本地测试与演示。
-    // 注意：密码为明文，仅用于教学示例。
-    auth_.addUser("admin", "admin", osp::Role::Admin);
-    auth_.addUser("author", "author", osp::Role::Author);
-    auth_.addUser("author2", "author2", osp::Role::Author); // 添加第二个作者用于测试权限隔离
-    auth_.addUser("reviewer", "reviewer", osp::Role::Reviewer);
-    auth_.addUser("editor", "editor", osp::Role::Editor);
+    // 用户数据将在 run() 中 VFS 挂载后从文件系统加载
 }
 
 void ServerApp::run()
@@ -72,6 +66,31 @@ void ServerApp::run()
         vfs_.mount("data.fs");
     }
 
+    // 初始化 AuthService 的 VFS 操作接口
+    initAuthVfsOperations();
+
+    // 从 VFS 加载用户数据
+    {
+        std::lock_guard<std::mutex> authLock(authMutex_);
+        auth_.loadUsers();
+
+        // 如果没有用户数据，初始化默认账号
+        if (auth_.getAllUsers().empty())
+        {
+            osp::log(osp::LogLevel::Info, "No users found, creating default accounts...");
+            auth_.addUser("admin", "admin", osp::Role::Admin);
+            auth_.addUser("author", "author", osp::Role::Author);
+            auth_.addUser("author2", "author2", osp::Role::Author);
+            auth_.addUser("reviewer", "reviewer", osp::Role::Reviewer);
+            auth_.addUser("editor", "editor", osp::Role::Editor);
+        }
+        else
+        {
+            osp::log(osp::LogLevel::Info, 
+                     "Loaded " + std::to_string(auth_.getAllUsers().size()) + " users from VFS");
+        }
+    }
+
     // 使用多线程 TCP 服务器
     osp::net::TcpServer tcpServer(port_, threadPoolSize_);
 
@@ -80,6 +99,47 @@ void ServerApp::run()
     });
 
     osp::log(osp::LogLevel::Info, "Server shutting down");
+}
+
+void ServerApp::initAuthVfsOperations()
+{
+    osp::domain::VfsOperations ops;
+
+    // 创建目录
+    ops.createDirectory = [this](const std::string& path) -> bool {
+        std::lock_guard<std::mutex> lock(vfsMutex_);
+        return vfs_.createDirectory(path);
+    };
+
+    // 写文件
+    ops.writeFile = [this](const std::string& path, const std::string& content) -> bool {
+        std::lock_guard<std::mutex> lock(vfsMutex_);
+        return vfs_.writeFile(path, content);
+    };
+
+    // 读文件
+    ops.readFile = [this](const std::string& path) -> std::optional<std::string> {
+        std::lock_guard<std::mutex> lock(vfsMutex_);
+        return vfs_.readFile(path);
+    };
+
+    // 删除文件
+    ops.removeFile = [this](const std::string& path) -> bool {
+        std::lock_guard<std::mutex> lock(vfsMutex_);
+        return vfs_.removeFile(path);
+    };
+
+    // 列出目录
+    ops.listDirectory = [this](const std::string& path) -> std::optional<std::string> {
+        std::lock_guard<std::mutex> lock(vfsMutex_);
+        return vfs_.listDirectory(path);
+    };
+
+    // 设置到 AuthService（需要在 authMutex_ 保护下）
+    std::lock_guard<std::mutex> authLock(authMutex_);
+    auth_.setVfsOperations(ops);
+
+    osp::log(osp::LogLevel::Info, "AuthService VFS persistence enabled");
 }
 
 void ServerApp::stop()
