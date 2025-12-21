@@ -1,0 +1,86 @@
+############################
+# CMake / C++ build outputs
+############################
+
+# 本地构建目录（推荐统一用 build/）
+build/
+cmake-build-*/
+
+# CMake 生成的中间文件
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+CTestTestfile.cmake
+Makefile
+install_manifest.txt
+
+############################
+# 编译产物
+############################
+
+*.o
+*.obj
+*.lo
+*.la
+*.a
+*.lib
+*.so
+*.so.*
+*.dylib
+*.dll
+*.exe
+*.out
+*.app
+*.pdb
+*.idb
+*.mod
+*.exp
+
+# 依赖文件 / 编译缓存
+*.d
+*.gcno
+*.gcda
+*.gcov
+
+############################
+# IDE / 编辑器配置
+############################
+
+# VSCode
+.vscode/
+
+# CLion / IntelliJ
+.idea/
+cmake-build-*/
+
+# Visual Studio
+.vs/
+*.vcxproj
+*.vcxproj.user
+*.vcxproj.filters
+*.sln
+
+# 其他编辑器
+*.swp
+*.swo
+*~
+
+############################
+# 操作系统杂项文件
+############################
+
+.DS_Store
+Thumbs.db
+
+############################
+# Node / Web assets
+############################
+
+node_modules/
+gateway/node_modules/
+web/node_modules/
+npm-debug.log*
+pnpm-debug.log*
+yarn-error.log*
+
+
