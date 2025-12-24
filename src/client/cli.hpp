@@ -3,6 +3,7 @@
 #include "common/protocol.hpp"
 
 #include <string>
+#include <optional>
 
 namespace osp::client
 {
@@ -126,6 +127,8 @@ private:
         AssignAskPaperId,
         AssignAskReviewer,
         ViewAskPaperId,
+        ViewPaperAskPaperId,
+        ViewReviewsAskPaperId,
         DecideAskPaperId,
         DecideAskDecision,
         PostAssignPrompt,
