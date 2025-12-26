@@ -74,9 +74,12 @@ private:
         SubmitAskContent,
         ViewAskPaperId,
         ViewReviewsAskPaperId,
+        ReviseAskPaperId,
+        ReviseAskContent,
         PostSubmitPrompt,
         PostViewPrompt,
-        PostViewReviewsPrompt
+        PostViewReviewsPrompt,
+        PostRevisePrompt
     };
     AuthorWizard authorWizard_ = AuthorWizard::None;
     std::string  tempTitle_;

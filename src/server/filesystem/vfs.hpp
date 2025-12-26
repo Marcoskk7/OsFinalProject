@@ -5,6 +5,7 @@
 #include "superblock.hpp"
 
 #include <cstddef>
+#include <functional>
 #include <fstream>
 #include <optional>
 #include <string>
@@ -26,6 +27,13 @@ public:
 
     // 挂载或初始化文件系统；如果 backingFile 不存在或不是合法的本项目文件系统，则自动格式化。
     bool mount(const std::string& backingFile);
+
+    // 刷新底层文件（用于 BACKUP/RESTORE 前确保落盘）
+    bool sync();
+
+    // 重新挂载（会关闭并重开 backingFile_，并重置 BlockCache）
+    // beforeOpen: 在关闭旧文件后、重新打开前执行（可用于外部覆盖 backingFile_ 内容，例如 RESTORE）
+    bool remount(const std::function<bool(const std::string& backingFile)>& beforeOpen = {});
 
     [[nodiscard]] const SuperBlock& superBlock() const noexcept { return sb_; }
     [[nodiscard]] BlockCache::Stats cacheStats() const noexcept { return cache_.stats(); }

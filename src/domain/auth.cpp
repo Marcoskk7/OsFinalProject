@@ -57,6 +57,10 @@ bool AuthService::loadUsers()
         return false;
     }
 
+    // 重新加载时先清空内存态用户表，避免 RESTORE 后出现“旧用户残留”
+    usersByName_.clear();
+    nextUserId_ = 1;
+
     // 确保用户目录存在
     vfsOps_.createDirectory("/system");
     vfsOps_.createDirectory(kUsersDir);

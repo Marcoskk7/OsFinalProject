@@ -6,6 +6,7 @@
 
 #include <sstream>
 #include <cstdlib>
+#include <filesystem>
 
 namespace osp::server
 {
@@ -228,7 +229,7 @@ osp::protocol::Message ServerApp::handleCommand(const osp::protocol::Command&   
     // 论文相关命令
     if (cmd.name == "LIST_PAPERS" || cmd.name == "SUBMIT" || cmd.name == "GET_PAPER"
         || cmd.name == "ASSIGN" || cmd.name == "REVIEW" || cmd.name == "LIST_REVIEWS"
-        || cmd.name == "DECISION")
+        || cmd.name == "DECISION" || cmd.name == "REVISE")
     {
         return handlePaperCommand(cmd, maybeSession);
     }
@@ -386,7 +387,30 @@ osp::protocol::Message ServerApp::handleCommand(const osp::protocol::Command&   
         {
             return osp::protocol::makeErrorResponse("PERMISSION_DENIED", "BACKUP: permission denied");
         }
-        return osp::protocol::makeSuccessResponse({{"message", "Backup completed"}, {"path", cmd.args[0]}});
+        const std::string& dstPath = cmd.args[0];
+
+        // 先确保 VFS 落盘（写块逻辑已 flush，这里再显式 flush 一次更稳）
+        {
+            std::lock_guard<std::mutex> lock(vfsMutex_);
+            if (!vfs_.sync())
+            {
+                return osp::protocol::makeErrorResponse("FS_ERROR", "BACKUP failed: cannot sync VFS");
+            }
+        }
+
+        try
+        {
+            namespace fs = std::filesystem;
+            fs::copy_file("data.fs", dstPath, fs::copy_options::overwrite_existing);
+        }
+        catch (const std::exception& e)
+        {
+            return osp::protocol::makeErrorResponse("FS_ERROR",
+                                                    std::string("BACKUP failed: ") + e.what(),
+                                                    {{"path", dstPath}});
+        }
+
+        return osp::protocol::makeSuccessResponse({{"message", "Backup completed"}, {"path", dstPath}});
     }
 
     if (cmd.name == "RESTORE")
@@ -403,7 +427,41 @@ osp::protocol::Message ServerApp::handleCommand(const osp::protocol::Command&   
         {
             return osp::protocol::makeErrorResponse("PERMISSION_DENIED", "RESTORE: permission denied");
         }
-        return osp::protocol::makeSuccessResponse({{"message", "Restore completed"}, {"path", cmd.args[0]}});
+        const std::string& srcPath = cmd.args[0];
+
+        namespace fs = std::filesystem;
+        if (!fs::exists(srcPath))
+        {
+            return osp::protocol::makeErrorResponse("NOT_FOUND", "RESTORE failed: backup file not found", {{"path", srcPath}});
+        }
+
+        bool ok = false;
+        {
+            // RESTORE 同时会影响 VFS 与用户数据，避免并发期间读到不一致状态
+            std::scoped_lock lock(vfsMutex_, authMutex_);
+
+            ok = vfs_.remount([&](const std::string& backingFile) -> bool {
+                try
+                {
+                    fs::copy_file(srcPath, backingFile, fs::copy_options::overwrite_existing);
+                    return true;
+                }
+                catch (...)
+                {
+                    return false;
+                }
+            });
+
+            if (!ok)
+            {
+                return osp::protocol::makeErrorResponse("FS_ERROR", "RESTORE failed: copy/remount failed", {{"path", srcPath}});
+            }
+
+            // 重新加载用户（AuthService::loadUsers 会先清空内存态用户表）
+            auth_.loadUsers();
+        }
+
+        return osp::protocol::makeSuccessResponse({{"message", "Restore completed"}, {"path", srcPath}});
     }
 
     if (cmd.name == "VIEW_SYSTEM_STATUS")
@@ -788,6 +846,145 @@ ServerApp::handlePaperCommand(const osp::protocol::Command&                     
         }
 
         return osp::protocol::makeSuccessResponse({{"message", "Paper submitted successfully"}, {"paperId", pid}});
+    }
+
+    if (cmd.name == "REVISE")
+    {
+        if (!hasPermission(maybeSession->role, Permission::SubmitRevision))
+        {
+            return osp::protocol::makeErrorResponse("PERMISSION_DENIED", "Permission denied: Author role required");
+        }
+
+        if (cmd.rawArgs.empty())
+        {
+            return osp::protocol::makeErrorResponse("MISSING_ARGS", "Usage: REVISE <PaperID> <NewContent...>");
+        }
+
+        std::istringstream iss(cmd.rawArgs);
+        std::string        pidStr;
+        iss >> pidStr;
+        if (pidStr.empty())
+        {
+            return osp::protocol::makeErrorResponse("MISSING_ARGS", "REVISE: missing paper_id");
+        }
+
+        std::string newContent;
+        std::getline(iss, newContent);
+        if (!newContent.empty() && newContent.front() == ' ')
+        {
+            newContent.erase(newContent.begin());
+        }
+        if (newContent.empty())
+        {
+            return osp::protocol::makeErrorResponse("INVALID_ARGS", "REVISE: content is empty");
+        }
+
+        const std::string paperDir = "/papers/" + pidStr;
+        const std::string metaPath = paperDir + "/meta.txt";
+        const std::string contentPath = paperDir + "/content.txt";
+        const std::string revisionsDir = paperDir + "/revisions";
+
+        // 读 meta，校验作者
+        std::optional<std::string> metaData;
+        {
+            std::lock_guard<std::mutex> lock(vfsMutex_);
+            metaData = vfs_.readFile(metaPath);
+        }
+        if (!metaData)
+        {
+            return osp::protocol::makeErrorResponse("NOT_FOUND", "Paper not found");
+        }
+
+        std::stringstream metaSS(*metaData);
+        std::uint32_t     p_id;
+        std::uint32_t     p_authorId;
+        std::string       p_status;
+        std::string       p_title;
+
+        if (!(metaSS >> p_id >> p_authorId >> p_status))
+        {
+            return osp::protocol::makeErrorResponse("FS_ERROR", "REVISE failed: bad meta format");
+        }
+        char dummy;
+        metaSS.get(dummy);
+        std::getline(metaSS, p_title);
+
+        if (maybeSession->role == osp::Role::Author && p_authorId != maybeSession->userId)
+        {
+            return osp::protocol::makeErrorResponse("PERMISSION_DENIED", "Permission denied: You can only revise your own papers");
+        }
+
+        std::uint32_t newVersion = 1;
+        {
+            std::lock_guard<std::mutex> lock(vfsMutex_);
+
+            // 确保 revisions 目录存在（不存在则创建）
+            if (!vfs_.listDirectory(revisionsDir))
+            {
+                vfs_.createDirectory(revisionsDir);
+            }
+
+            // 计算下一个版本号：扫描 vN.txt
+            if (auto listing = vfs_.listDirectory(revisionsDir))
+            {
+                std::stringstream ss(*listing);
+                std::string       entry;
+                std::uint32_t     maxV = 0;
+                while (std::getline(ss, entry))
+                {
+                    if (entry.empty() || entry.back() == '/')
+                    {
+                        continue;
+                    }
+                    // 期望格式：v<number>.txt
+                    if (entry.size() >= 6 && entry.front() == 'v' && entry.rfind(".txt") == entry.size() - 4)
+                    {
+                        const std::string numStr = entry.substr(1, entry.size() - 1 - 4);
+                        try
+                        {
+                            std::uint32_t v = static_cast<std::uint32_t>(std::stoul(numStr));
+                            if (v > maxV) maxV = v;
+                        }
+                        catch (...)
+                        {
+                            // ignore
+                        }
+                    }
+                }
+                newVersion = maxV + 1;
+            }
+
+            // 保存旧内容到 revisions
+            const std::string revPath = revisionsDir + "/v" + std::to_string(newVersion) + ".txt";
+            const auto        oldContent = vfs_.readFile(contentPath);
+            if (!vfs_.writeFile(revPath, oldContent ? *oldContent : std::string{}))
+            {
+                return osp::protocol::makeErrorResponse("FS_ERROR", "REVISE failed: cannot save revision history");
+            }
+
+            // 写入新内容
+            if (!vfs_.writeFile(contentPath, newContent))
+            {
+                return osp::protocol::makeErrorResponse("FS_ERROR", "REVISE failed: cannot write new content");
+            }
+
+            // 更新 meta 状态为 Submitted（重新进入提交态）
+            std::ostringstream newMeta;
+            newMeta << p_id << "\n"
+                    << p_authorId << "\n"
+                    << osp::domain::paperStatusToString(osp::domain::PaperStatus::Submitted) << "\n"
+                    << p_title;
+            if (!vfs_.writeFile(metaPath, newMeta.str()))
+            {
+                return osp::protocol::makeErrorResponse("FS_ERROR", "REVISE failed: cannot update meta");
+            }
+        }
+
+        return osp::protocol::makeSuccessResponse({
+            {"message", "Revision submitted successfully"},
+            {"paperId", pidStr},
+            {"revision", newVersion}
+        });
     }
 
     if (cmd.name == "ASSIGN")
