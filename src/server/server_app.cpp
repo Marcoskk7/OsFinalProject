@@ -850,9 +850,10 @@ ServerApp::handlePaperCommand(const osp::protocol::Command&                     
 
     if (cmd.name == "REVISE")
     {
-        if (!hasPermission(maybeSession->role, Permission::SubmitRevision))
+        // 只有Author角色可以执行REVISE命令
+        if (maybeSession->role != osp::Role::Author)
         {
-            return osp::protocol::makeErrorResponse("PERMISSION_DENIED", "Permission denied: Author role required");
+            return osp::protocol::makeErrorResponse("PERMISSION_DENIED", "Permission denied: Only Author role can revise papers");
         }
 
         if (cmd.rawArgs.empty())
@@ -909,9 +910,11 @@ ServerApp::handlePaperCommand(const osp::protocol::Command&                     
         metaSS.get(dummy);
         std::getline(metaSS, p_title);
 
-        if (maybeSession->role == osp::Role::Author && p_authorId != maybeSession->userId)
+        // Author只能修改自己的论文（即LIST_PAPERS中显示的论文）
+        // 检查论文作者ID是否等于当前用户ID，确保只能修改自己paper list中的论文
+        if (p_authorId != maybeSession->userId)
         {
-            return osp::protocol::makeErrorResponse("PERMISSION_DENIED", "Permission denied: You can only revise your own papers");
+            return osp::protocol::makeErrorResponse("PERMISSION_DENIED", "Permission denied: You can only revise papers in your own paper list");
         }
 
         std::uint32_t newVersion = 1;
