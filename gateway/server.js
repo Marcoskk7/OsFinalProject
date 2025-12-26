@@ -94,7 +94,18 @@ app.post('/api/login', async (req, res) => {
   }
   try {
     const resp = await forwardCommand(`LOGIN ${username} ${password}`);
-    res.json({ ok: true, type: resp.type, payload: resp.payload });
+    // If the underlying server returned an Error message type, treat as failure
+    if (resp.type === MessageType.Error) {
+      return res.status(401).json({ ok: false, error: resp.payload || 'Authentication failed' });
+    }
+
+    // Expect the payload to include a SESSION token on success
+    if (typeof resp.payload !== 'string' || !/SESSION\s+\S+/i.test(resp.payload)) {
+      return res.status(401).json({ ok: false, error: resp.payload || 'Invalid credentials' });
+    }
+
+    // Successful login
+    return res.json({ ok: true, type: resp.type, payload: resp.payload });
   } catch (err) {
     res.status(502).json({ ok: false, error: err.message });
   }
@@ -120,6 +131,12 @@ app.post('/api/health', (_req, res) => {
 
 // Serve static web UI
 const webDir = path.join(__dirname, '..', 'web');
+
+// Serve login page as the root route so users land on the login screen first
+app.get('/', (_req, res) => {
+  res.sendFile(path.join(webDir, 'login.html'));
+});
+
 app.use(express.static(webDir));
 
 app.get('/healthz', (req, res) => res.json({ ok: true }));

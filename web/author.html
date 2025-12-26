@@ -1,0 +1,461 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>OS Project UI • Author Console</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+      :root {
+        /* Aurora workspace theme */
+        --bg: #070a12;
+        --panel: rgba(12, 16, 26, 0.9);
+        --border: rgba(255, 255, 255, 0.08);
+        --border-strong: rgba(168, 85, 247, 0.6);
+        --primary: #a855f7;
+        --primary-2: #22d3ee;
+        --text: #e5e7eb;
+        --muted: #94a3b8;
+        --success: #22c55e;
+        --warn: #f59e0b;
+        --danger: #ef4444;
+        --radius-lg: 20px;
+        --radius-md: 12px;
+        --ease: cubic-bezier(0.25, 1, 0.5, 1);
+      }
+
+      * { box-sizing: border-box; }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        padding: 32px 16px;
+        background:
+          radial-gradient(circle at 18% 18%, rgba(168, 85, 247, 0.16), transparent 30%),
+          radial-gradient(circle at 82% 12%, rgba(34, 211, 238, 0.14), transparent 30%),
+          radial-gradient(circle at 50% 88%, rgba(78, 205, 196, 0.12), transparent 40%),
+          var(--bg);
+        color: var(--text);
+        font-family: 'Space Grotesk', system-ui, sans-serif;
+        overflow-x: hidden;
+      }
+
+      .card {
+        width: min(1000px, 100%);
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-lg);
+        padding: 36px;
+        box-shadow: 0 24px 70px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255,255,255,0.02);
+        position: relative;
+        overflow: hidden;
+        backdrop-filter: blur(18px);
+      }
+
+      .card::before {
+        content: '';
+        position: absolute;
+        inset: 0;
+        background: radial-gradient(circle at 20% 0%, rgba(168,85,247,0.12), transparent 40%),
+          radial-gradient(circle at 80% 20%, rgba(34,211,238,0.14), transparent 40%);
+        pointer-events: none;
+        opacity: 0.7;
+      }
+
+      .header {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        gap: 16px;
+        margin-bottom: 32px;
+        padding-bottom: 20px;
+        border-bottom: 1px solid var(--border);
+      }
+
+      h1 { margin: 0; font-size: 30px; letter-spacing: -0.4px; }
+      .subtitle { margin-top: 6px; color: var(--muted); font-size: 14px; display: flex; align-items: center; gap: 10px; }
+
+      .status-dot {
+        width: 9px;
+        height: 9px;
+        border-radius: 50%;
+        background: var(--success);
+        box-shadow: 0 0 12px var(--success);
+        animation: pulse 1.8s infinite;
+      }
+
+      @keyframes pulse {
+        0% { transform: scale(1); opacity: 0.9; }
+        50% { transform: scale(1.12); opacity: 0.45; }
+        100% { transform: scale(1); opacity: 0.9; }
+      }
+
+      .tag-stack { display: flex; flex-direction: column; align-items: flex-end; gap: 8px; }
+      .tag { display: inline-flex; align-items: center; gap: 8px; padding: 8px 12px; border-radius: 999px; border: 1px solid var(--border); font-size: 12px; letter-spacing: 0.6px; background: rgba(255,255,255,0.04); }
+      .tag.user { color: var(--primary-2); border-color: rgba(34,211,238,0.5); background: rgba(34,211,238,0.12); }
+
+      .section { margin-bottom: 26px; }
+      .section-header { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; color: var(--muted); font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; }
+      .section-header i { color: var(--primary-2); }
+
+      .row { display: flex; gap: 14px; flex-wrap: wrap; }
+
+      .input-with-icon { position: relative; flex: 1; min-width: 220px; }
+      .input-with-icon i { position: absolute; left: 14px; top: 50%; transform: translateY(-50%); color: var(--muted); font-size: 13px; }
+
+      input {
+        width: 100%;
+        background: rgba(0, 0, 0, 0.45);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-md);
+        padding: 12px 14px 12px 42px;
+        color: var(--text);
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 14px;
+        transition: border 0.25s var(--ease), box-shadow 0.25s var(--ease);
+      }
+      input:focus { border-color: var(--border-strong); box-shadow: 0 0 0 1px var(--border-strong), 0 14px 30px rgba(168,85,247,0.18); outline: none; }
+      input::placeholder { color: rgba(148, 163, 184, 0.6); }
+
+      button {
+        border: 1px solid var(--border);
+        background: linear-gradient(140deg, rgba(255,255,255,0.05), rgba(255,255,255,0.02));
+        color: var(--text);
+        padding: 0 18px;
+        height: 46px;
+        border-radius: var(--radius-md);
+        font-weight: 800;
+        letter-spacing: 0.05em;
+        cursor: pointer;
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        transition: transform 0.18s var(--ease), border 0.18s var(--ease), box-shadow 0.18s var(--ease);
+      }
+      button:hover { transform: translateY(-1px); border-color: rgba(168,85,247,0.6); box-shadow: 0 12px 26px rgba(0,0,0,0.4); }
+      button:active { transform: translateY(0); }
+      button.primary { background: linear-gradient(120deg, #a855f7, #22d3ee); color: #0b0d14; border: none; box-shadow: 0 16px 36px rgba(168,85,247,0.35); }
+      button.success { color: var(--success); border-color: rgba(34,197,94,0.5); }
+      button.warn { color: var(--warn); border-color: rgba(245,158,11,0.45); }
+      button.danger { color: var(--danger); border-color: rgba(239,68,68,0.5); }
+
+      .quick-commands { margin-top: 12px; padding: 12px; border: 1px dashed var(--border); border-radius: var(--radius-md); background: rgba(255,255,255,0.03); display: flex; flex-direction: column; gap: 10px; }
+      .quick-commands span { color: var(--muted); font-size: 12px; letter-spacing: 0.08em; }
+      .quick-command { background: rgba(255,255,255,0.03); border: 1px solid var(--border); color: var(--text); font-size: 12px; height: auto; justify-content: space-between; padding: 10px 12px; }
+
+      .papers-panel { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 14px; margin-top: 12px; }
+      .paper-card { border: 1px solid var(--border); border-radius: var(--radius-md); padding: 14px; background: rgba(255,255,255,0.03); backdrop-filter: blur(4px); transition: border 0.2s var(--ease), transform 0.2s var(--ease); }
+      .paper-card:hover { border-color: rgba(168,85,247,0.7); transform: translateY(-2px); }
+      .paper-meta { display: flex; justify-content: space-between; align-items: center; font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--muted); }
+      .paper-status { padding: 4px 8px; border-radius: 8px; background: rgba(255,255,255,0.06); font-size: 11px; }
+      .paper-title { margin-top: 8px; font-weight: 700; color: var(--text); line-height: 1.4; }
+      .papers-empty { text-align: center; padding: 16px; border: 1px dashed var(--border); color: var(--muted); }
+
+      .output-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+      #output {
+        min-height: 240px;
+        max-height: 400px;
+        overflow-y: auto;
+        background: #080b13;
+        border: 1px solid var(--border);
+        border-radius: var(--radius-md);
+        padding: 18px;
+        font-family: 'JetBrains Mono', monospace;
+        color: var(--text);
+        line-height: 1.6;
+        box-shadow: inset 0 0 20px rgba(0,0,0,0.4);
+      }
+      #output::-webkit-scrollbar { width: 8px; }
+      #output::-webkit-scrollbar-thumb { background: #1f2937; border-radius: 6px; }
+
+      .copy-btn { height: 34px; padding: 0 14px; font-size: 12px; border-radius: 10px; }
+
+      .notification {
+        position: fixed;
+        top: 20px;
+        right: 20px;
+        padding: 14px 18px;
+        background: #0f172a;
+        border: 1px solid rgba(168,85,247,0.5);
+        border-radius: 12px;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        color: var(--text);
+        box-shadow: 0 15px 40px rgba(0,0,0,0.4);
+        transform: translateX(140%);
+        transition: transform 0.45s var(--ease);
+        z-index: 10;
+      }
+      .notification.show { transform: translateX(0); }
+
+      @media (max-width: 768px) {
+        .card { padding: 24px 18px; border-radius: 14px; }
+        .header { flex-direction: column; align-items: flex-start; }
+        .tag-stack { align-items: flex-start; }
+        .row { flex-direction: column; }
+        input, button { width: 100%; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="notification" id="notification">
+      <i class="fas fa-info-circle"></i>
+      <span id="notification-text">Ready</span>
+    </div>
+
+    <div class="card">
+      <div class="header">
+        <div>
+          <h1>Author Console</h1>
+          <p class="subtitle"><i class="fas fa-pen"></i> Manuscript workspace <span class="status-dot"></span></p>
+        </div>
+        <div class="tag-stack">
+          <div class="tag"><i class="fas fa-shield-alt"></i> Encrypted</div>
+          <div class="tag user"><i class="fas fa-user-astronaut"></i> <span id="current-user">Guest</span></div>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-header"><i class="fas fa-network-wired"></i> Connectivity</div>
+        <div class="row">
+          <button id="ping" class="success"><i class="fas fa-satellite-dish"></i> Ping Server</button>
+          <button id="health" class="warn"><i class="fas fa-microchip"></i> Health Diagnostics</button>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-header"><i class="fas fa-fingerprint"></i> Session</div>
+        <div class="row">
+          <div class="input-with-icon">
+            <i class="fas fa-key"></i>
+            <input id="session" placeholder="Paste session token" />
+          </div>
+          <button id="logout" class="danger"><i class="fas fa-power-off"></i> Logout</button>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-header"><i class="fas fa-terminal"></i> Command Line Interface</div>
+        <div class="row">
+          <div class="input-with-icon">
+            <i class="fas fa-angle-right"></i>
+            <input id="command" value="LIST_PAPERS" placeholder="Enter author directive" />
+          </div>
+          <button id="send" class="primary"><i class="fas fa-play"></i> Execute</button>
+          <button id="clear-command"><i class="fas fa-eraser"></i> Clear</button>
+        </div>
+        <div class="quick-commands" id="help-commands">
+          <div style="display:flex; align-items:center; justify-content:space-between; width:100%; margin-bottom:8px;">
+            <span><i class="fas fa-book"></i> AVAILABLE DIRECTIVES</span>
+            <button id="toggle-help" class="copy-btn" data-open="false">Show All</button>
+          </div>
+          <div id="help-list" style="display:none; width:100%;"></div>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-header"><i class="fas fa-database"></i> Paper Registery</div>
+        <div class="row">
+          <button id="list-papers" class="secondary" style="width: 100%; justify-content: center"><i class="fas fa-list"></i> Load Registry</button>
+        </div>
+        <div id="papers-panel" class="papers-panel"></div>
+      </div>
+
+      <div class="section">
+        <div class="output-header">
+          <div class="section-header" style="margin:0; border:none; padding:0"><i class="fas fa-desktop"></i> System Logs</div>
+          <button class="copy-btn" id="copy-output"><i class="fas fa-copy"></i> Copy Log</button>
+        </div>
+        <pre id="output">Author console initialized...
+> Awaiting authenticated session...</pre>
+      </div>
+    </div>
+
+    <script>
+      const $ = (sel) => document.querySelector(sel);
+      const notification = $('#notification');
+      const notificationText = $('#notification-text');
+      const papersPanel = $('#papers-panel');
+      const listBtn = $('#list-papers');
+      let papersVisible = false;
+      let loggedInUser = '';
+
+      const notify = (msg, type = 'info') => {
+        const iconMap = { success: 'fa-check-circle', error: 'fa-radiation', warning: 'fa-exclamation-triangle', info: 'fa-info-circle' };
+        notification.querySelector('i').className = `fas ${iconMap[type] || iconMap.info}`;
+        notificationText.textContent = msg;
+        const color = type === 'error' ? 'var(--danger)' : type === 'warning' ? 'var(--warn)' : type === 'success' ? 'var(--success)' : 'var(--primary)';
+        notification.style.borderColor = color;
+        notification.style.boxShadow = `0 10px 30px ${color}33`;
+        notification.classList.add('show');
+        setTimeout(() => notification.classList.remove('show'), 2600);
+      };
+
+      const setOutput = (text, type = 'info') => {
+        const output = $('#output');
+        const ts = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        const prefix = type === 'error' ? '[ERR]' : type === 'success' ? '[OK ]' : type === 'warning' ? '[WRN]' : '[LOG]';
+        const color = type === 'error' ? 'var(--danger)' : type === 'success' ? 'var(--success)' : type === 'warning' ? 'var(--warn)' : 'var(--muted)';
+        const line = `<span style="color:${color}">${prefix} ${ts} :: ${text}</span>`;
+        output.innerHTML = `${line}\n` + output.innerHTML;
+        if (output.innerHTML.split('\n').length > 80) output.innerHTML = output.innerHTML.split('\n').slice(0, 80).join('\n');
+      };
+
+      const api = async (path, body) => {
+        try {
+          const res = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) });
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          return await res.json();
+        } catch (err) {
+          setOutput(`API failure: ${err.message}`, 'error');
+          notify('Connection failed', 'error');
+          return { ok: false, error: err.message };
+        }
+      };
+
+      const setSession = (id) => { const input = $('#session'); input.value = id || ''; };
+      const setUser = (name) => { loggedInUser = name || ''; $('#current-user').textContent = name || 'Guest'; };
+
+      const renderPapers = (payload) => {
+        papersPanel.innerHTML = '';
+        if (!payload || !payload.trim()) {
+          const empty = document.createElement('div');
+          empty.className = 'papers-empty';
+          empty.textContent = 'No Papers loaded.';
+          papersPanel.appendChild(empty);
+          return;
+        }
+        payload.split(/\n+/).map((l) => l.trim()).filter(Boolean).forEach((line) => {
+          const m = line.match(/\[ID:\s*(\d+)\]\s*(.*?)\s*\(Status:\s*([^)]*)\)/i);
+          const card = document.createElement('div');
+          card.className = 'paper-card';
+          const meta = document.createElement('div');
+          meta.className = 'paper-meta';
+          const id = document.createElement('span');
+          id.innerHTML = `<i class="fas fa-hashtag"></i> ${m ? m[1] : '—'}`;
+          const status = document.createElement('span');
+          status.className = 'paper-status';
+          status.textContent = m ? m[3] : 'Unknown';
+          if (m && /accept/i.test(m[3])) status.style.color = 'var(--success)';
+          if (m && /reject/i.test(m[3])) status.style.color = 'var(--danger)';
+          if (m && /pending|revise/i.test(m[3])) status.style.color = 'var(--warn)';
+          meta.append(id, status);
+          const title = document.createElement('div');
+          title.className = 'paper-title';
+          title.textContent = m ? m[2] : line;
+          card.append(meta, title);
+          papersPanel.appendChild(card);
+        });
+      };
+
+      const handlePing = async () => { setOutput('Pinging host...', 'info'); const r = await api('/api/ping'); if (r.ok) { setOutput(`Response: ${JSON.stringify(r, null, 2)}`, 'success'); notify('Host reachable', 'success'); } };
+      const handleHealth = async () => { setOutput('Running diagnostics...', 'info'); const r = await api('/api/health'); if (r.ok) { setOutput(`Diagnostics: ${JSON.stringify(r, null, 2)}`, 'success'); notify('System healthy', 'success'); } };
+
+      const handleLogout = () => {
+        localStorage.removeItem('sessionId');
+        localStorage.removeItem('username');
+        localStorage.removeItem('role');
+        setUser('Guest');
+        notify('Session cleared', 'info');
+        window.location.href = 'login.html';
+      };
+
+      const submitCommand = async () => {
+        const command = $('#command').value.trim();
+        const sessionId = $('#session').value.trim();
+        if (!command) { setOutput('Command required', 'error'); notify('Missing command', 'error'); return; }
+        setOutput(`Executing: ${command}`, 'info');
+        const r = await api('/api/command', { command, sessionId: sessionId || undefined });
+        if (r.ok) { setOutput(`Payload: ${JSON.stringify(r, null, 2)}`, 'success'); notify('Execution done', 'success'); }
+        else setOutput(`Error: ${JSON.stringify(r, null, 2)}`, 'error');
+      };
+
+      const toggleList = async () => {
+        if (papersVisible) {
+          papersVisible = false;
+          papersPanel.innerHTML = '';
+          papersPanel.style.display = 'none';
+          listBtn.innerHTML = '<i class="fas fa-list"></i> Load Registry';
+          return;
+        }
+        const sessionId = $('#session').value.trim();
+        if (!sessionId) { setOutput('Session required for listing', 'error'); notify('Provide session token', 'error'); return; }
+        setOutput('Fetching papers...', 'info');
+        const r = await api('/api/command', { command: 'LIST_PAPERS', sessionId });
+        if (r.ok && typeof r.payload === 'string') {
+          renderPapers(r.payload);
+          papersVisible = true;
+          papersPanel.style.display = 'grid';
+          listBtn.innerHTML = '<i class="fas fa-eye-slash"></i> Hide Registry';
+          setOutput('Papers loaded', 'success');
+        } else {
+          setOutput(`Load failed: ${JSON.stringify(r, null, 2)}`, 'error');
+          notify('Failed to load list', 'error');
+        }
+      };
+
+      const quickItems = [
+        { cmd: 'LIST_PAPERS' },
+        { cmd: 'SUBMIT "My Paper" "Abstract"' },
+        { cmd: 'GET_PAPER [ID]' },
+        { cmd: 'UPDATE_PAPER [ID] "New content"' },
+        { cmd: 'DELETE_PAPER [ID]' },
+      ];
+
+      const renderQuick = () => {
+        const container = document.createElement('div');
+        container.className = 'row';
+        container.style.flexWrap = 'wrap';
+        quickItems.forEach((item) => {
+          const btn = document.createElement('button');
+          btn.className = 'quick-command';
+          btn.innerHTML = `<span>${item.cmd}</span><i class="fas fa-chevron-right"></i>`;
+          btn.addEventListener('click', () => { $('#command').value = item.cmd; $('#command').focus(); });
+          container.appendChild(btn);
+        });
+        return container;
+      };
+
+      document.getElementById('ping').addEventListener('click', handlePing);
+      document.getElementById('health').addEventListener('click', handleHealth);
+      document.getElementById('logout').addEventListener('click', handleLogout);
+      document.getElementById('send').addEventListener('click', submitCommand);
+      document.getElementById('clear-command').addEventListener('click', () => { $('#command').value = ''; $('#command').focus(); });
+      document.getElementById('copy-output').addEventListener('click', () => { navigator.clipboard.writeText($('#output').textContent); notify('Log copied', 'success'); });
+      listBtn.addEventListener('click', toggleList);
+      $('#command').addEventListener('keypress', (e) => { if (e.key === 'Enter') submitCommand(); });
+
+      const helpListHost = $('#help-list');
+      const helpToggle = $('#toggle-help');
+      const quickGrid = renderQuick();
+      if (helpListHost && helpToggle) {
+        helpListHost.appendChild(quickGrid);
+        helpToggle.addEventListener('click', () => {
+          const isOpen = helpToggle.dataset.open === 'true';
+          helpToggle.dataset.open = (!isOpen).toString();
+          helpToggle.innerHTML = isOpen ? 'Show All' : 'Hide';
+          helpListHost.style.display = isOpen ? 'none' : 'block';
+        });
+      }
+
+      window.addEventListener('DOMContentLoaded', () => {
+        const savedSession = localStorage.getItem('sessionId');
+        if (!savedSession) {
+          notify('Login required', 'warning');
+          window.location.href = 'login.html';
+          return;
+        }
+        setSession(savedSession);
+        setUser(localStorage.getItem('username') || 'Author');
+        setTimeout(() => notify('Author console ready', 'success'), 500);
+      });
+    </script>
+  </body>
+</html>
