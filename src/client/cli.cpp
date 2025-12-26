@@ -353,6 +353,7 @@ void Cli::printAuthorNumericMenu() const
     std::cout << "  2) 查看我的论文列表 (LIST_PAPERS)\n";
     std::cout << "  3) 查看论文详情 (GET_PAPER)\n";
     std::cout << "  4) 查看评审意见/状态 (LIST_REVIEWS)\n";
+    std::cout << "  5) 提交修订版 (REVISE)\n";
     std::cout << "  (直接输入数字开始操作；也可以直接输入原始命令)\n";
     std::cout << "----------------\n";
 }
@@ -435,6 +436,44 @@ bool Cli::handleAuthorMenuInput(const std::string& line)
             authorWizard_ = AuthorWizard::PostViewReviewsPrompt;
             return true;
         }
+        case AuthorWizard::ReviseAskPaperId:
+            tempPaperId_ = t;
+            if (tempPaperId_.empty())
+            {
+                std::cout << "paper_id 不能为空。重新输入 paper_id: ";
+                return true;
+            }
+            std::cout << "输入修订后的论文内容（可包含空格）: ";
+            authorWizard_ = AuthorWizard::ReviseAskContent;
+            return true;
+        case AuthorWizard::ReviseAskContent:
+        {
+            const std::string content = t;
+            if (tempPaperId_.empty())
+            {
+                std::cout << "paper_id 不能为空。重新输入 paper_id: ";
+                authorWizard_ = AuthorWizard::ReviseAskPaperId;
+                return true;
+            }
+            if (content.empty())
+            {
+                std::cout << "内容不能为空。重新输入修订内容: ";
+                return true;
+            }
+
+            auto payload = buildJsonPayload("REVISE " + tempPaperId_ + " " + content);
+            if (auto resp = sendRequest(payload))
+            {
+                printResponse(*resp);
+            }
+            else
+            {
+                std::cout << "发送失败\n";
+            }
+            std::cout << "输入 c 继续提交修订，m 返回作者菜单，其他退出向导: ";
+            authorWizard_ = AuthorWizard::PostRevisePrompt;
+            return true;
+        }
         case AuthorWizard::PostSubmitPrompt:
             if (t == "c" || t == "C")
             {
@@ -480,6 +519,21 @@ bool Cli::handleAuthorMenuInput(const std::string& line)
             }
             authorWizard_ = AuthorWizard::None;
             return true;
+        case AuthorWizard::PostRevisePrompt:
+            if (t == "c" || t == "C")
+            {
+                authorWizard_ = AuthorWizard::ReviseAskPaperId;
+                std::cout << "提交修订版，输入 paper_id: ";
+                return true;
+            }
+            if (t == "m" || t == "M")
+            {
+                authorWizard_ = AuthorWizard::None;
+                printAuthorNumericMenu();
+                return true;
+            }
+            authorWizard_ = AuthorWizard::None;
+            return true;
         default: break;
         }
     }
@@ -515,6 +569,12 @@ bool Cli::handleAuthorMenuInput(const std::string& line)
     {
         authorWizard_ = AuthorWizard::ViewReviewsAskPaperId;
         std::cout << "查看评审意见/状态，输入 paper_id: ";
+        return true;
+    }
+    if (t == "5")
+    {
+        authorWizard_ = AuthorWizard::ReviseAskPaperId;
+        std::cout << "提交修订版，输入 paper_id: ";
         return true;
     }
 

@@ -59,6 +59,40 @@ bool Vfs::mount(const std::string& backingFile)
     return true;
 }
 
+bool Vfs::sync()
+{
+    if (!file_.is_open())
+    {
+        return false;
+    }
+    file_.flush();
+    return static_cast<bool>(file_);
+}
+
+bool Vfs::remount(const std::function<bool(const std::string& backingFile)>& beforeOpen)
+{
+    // 先关闭旧文件句柄，避免外部 copy_file 覆盖时冲突
+    if (file_.is_open())
+    {
+        file_.flush();
+        file_.close();
+    }
+
+    // 重置缓存（避免继续命中旧数据块）
+    cache_ = BlockCache(cache_.capacity());
+
+    if (beforeOpen)
+    {
+        if (!beforeOpen(backingFile_))
+        {
+            return false;
+        }
+    }
+
+    // 复用 mount 逻辑重新打开 backingFile_
+    return mount(backingFile_);
+}
+
 bool Vfs::loadSuperBlock()
 {
     if (!file_.is_open())

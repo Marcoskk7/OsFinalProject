@@ -9,19 +9,7 @@ const TCP_HOST = process.env.TCP_HOST || '127.0.0.1';
 const TCP_PORT = parseInt(process.env.TCP_PORT || '5555', 10);
 const HTTP_PORT = parseInt(process.env.PORT || '3000', 10);
 
-const MessageType = {
-  AuthRequest: 0,
-  AuthResponse: 1,
-  CommandRequest: 2,
-  CommandResponse: 3,
-  Error: 4,
-};
-
-function serializeMessage(type, payload) {
-  return `${type}\n${payload}`;
-}
-
-function sendTcpCommand(payload) {
+function sendTcpEnvelope(envelope) {
   return new Promise((resolve, reject) => {
     const socket = new net.Socket();
     let buffer = Buffer.alloc(0);
@@ -39,12 +27,12 @@ function sendTcpCommand(payload) {
       if (expectedLength !== null && buffer.length >= 4 + expectedLength) {
         const body = buffer.slice(4, 4 + expectedLength).toString();
         socket.end();
-        resolve(body);
+        resolve(body); // JSON string: {"type":"...","payload":{...}}
       }
     });
 
     socket.connect(TCP_PORT, TCP_HOST, () => {
-      const body = serializeMessage(MessageType.CommandRequest, payload);
+      const body = JSON.stringify(envelope);
       const len = Buffer.alloc(4);
       len.writeUInt32BE(Buffer.byteLength(body), 0);
       socket.write(len);
@@ -53,17 +41,79 @@ function sendTcpCommand(payload) {
   });
 }
 
-async function forwardCommand(command, sessionId) {
-  const payload = sessionId ? `SESSION ${sessionId} CMD ${command}` : command;
-  const raw = await sendTcpCommand(payload);
-  // raw format: "<type>\n<payload>"
-  const nl = raw.indexOf('\n');
-  if (nl === -1) {
-    return { type: MessageType.Error, payload: 'Malformed response' };
+function parseCommandLine(line) {
+  const s = (line || '').trim();
+  if (!s) {
+    return { name: '', rawArgs: '', args: [] };
   }
-  const typeInt = parseInt(raw.slice(0, nl), 10);
-  const respPayload = raw.slice(nl + 1);
-  return { type: typeInt, payload: respPayload };
+  const firstSpace = s.search(/\s/);
+  if (firstSpace === -1) {
+    return { name: s, rawArgs: '', args: [] };
+  }
+  const name = s.slice(0, firstSpace);
+  const rawArgs = s.slice(firstSpace).trim();
+  const args = rawArgs ? rawArgs.split(/\s+/).filter(Boolean) : [];
+  return { name, rawArgs, args };
+}
+
+function toLegacyPayload(commandName, respPayload) {
+  const data = respPayload && respPayload.data ? respPayload.data : {};
+
+  if (commandName === 'PING') {
+    return 'PONG';
+  }
+
+  if (commandName === 'LIST_PAPERS' && data && Array.isArray(data.papers)) {
+    // Keep old UI parser working: "[ID: 1] title (Status: Submitted)"
+    return data.papers
+      .map((p) => `[ID: ${p.id}] ${p.title} (Status: ${p.status})`)
+      .join('\n');
+  }
+
+  // Default: stringify returned data or whole payload
+  if (data && Object.keys(data).length > 0) {
+    return JSON.stringify(data, null, 2);
+  }
+  return JSON.stringify(respPayload, null, 2);
+}
+
+async function forwardCommand(command, sessionId) {
+  const parsed = parseCommandLine(command);
+  if (!parsed.name) {
+    return { ok: false, error: 'Missing command' };
+  }
+
+  const cmdJson = {
+    sessionId: sessionId ? String(sessionId) : null,
+    cmd: parsed.name,
+    args: parsed.args,
+    rawArgs: parsed.rawArgs,
+  };
+
+  const reqEnvelope = { type: 'CommandRequest', payload: cmdJson };
+  const raw = await sendTcpEnvelope(reqEnvelope);
+
+  let respEnvelope;
+  try {
+    respEnvelope = JSON.parse(raw);
+  } catch (e) {
+    return { ok: false, error: 'Malformed response from TCP server (not JSON)' };
+  }
+
+  const payload = respEnvelope && respEnvelope.payload ? respEnvelope.payload : {};
+  const isOk = !!(payload && payload.ok);
+
+  if (!isOk) {
+    const msg = payload && payload.error && payload.error.message ? payload.error.message : 'Command failed';
+    return { ok: false, type: respEnvelope.type, error: msg, raw: payload };
+  }
+
+  return {
+    ok: true,
+    type: respEnvelope.type,
+    payload: toLegacyPayload(parsed.name, payload),
+    data: payload.data,
+  };
 }
 
 const app = express();
@@ -81,7 +131,10 @@ app.use((req, res, next) => {
 app.post('/api/ping', async (req, res) => {
   try {
     const resp = await forwardCommand('PING');
-    res.json({ ok: true, type: resp.type, payload: resp.payload });
+    if (!resp.ok) {
+      return res.status(502).json(resp);
+    }
+    res.json(resp);
   } catch (err) {
     res.status(502).json({ ok: false, error: err.message });
   }
@@ -93,19 +146,19 @@ app.post('/api/login', async (req, res) => {
     return res.status(400).json({ ok: false, error: 'Missing username or password' });
   }
   try {
+    // Talk to C++ server via JSON protocol, but respond in legacy string for existing web UI.
     const resp = await forwardCommand(`LOGIN ${username} ${password}`);
-    // If the underlying server returned an Error message type, treat as failure
-    if (resp.type === MessageType.Error) {
-      return res.status(401).json({ ok: false, error: resp.payload || 'Authentication failed' });
+    if (!resp.ok) {
+      return res.status(401).json(resp);
     }
 
-    // Expect the payload to include a SESSION token on success
-    if (typeof resp.payload !== 'string' || !/SESSION\s+\S+/i.test(resp.payload)) {
-      return res.status(401).json({ ok: false, error: resp.payload || 'Invalid credentials' });
+    // Build legacy payload: "SESSION <id> ROLE <role> USER <username> USERID <userId>"
+    const data = resp.data || {};
+    if (!data.sessionId || !data.role) {
+      return res.status(401).json({ ok: false, error: 'Login failed: missing sessionId/role in response', raw: resp });
     }
-
-    // Successful login
-    return res.json({ ok: true, type: resp.type, payload: resp.payload });
+    const legacy = `SESSION ${data.sessionId} ROLE ${data.role} USER ${data.username || username} USERID ${data.userId ?? ''}`.trim();
+    return res.json({ ok: true, type: resp.type, payload: legacy, data });
   } catch (err) {
     res.status(502).json({ ok: false, error: err.message });
   }
@@ -118,7 +171,10 @@ app.post('/api/command', async (req, res) => {
   }
   try {
     const resp = await forwardCommand(command, sessionId);
-    res.json({ ok: true, type: resp.type, payload: resp.payload });
+    if (!resp.ok) {
+      return res.status(200).json(resp);
+    }
+    res.json(resp);
   } catch (err) {
     res.status(502).json({ ok: false, error: err.message });
   }
