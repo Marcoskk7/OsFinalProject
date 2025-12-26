@@ -15,7 +15,7 @@ To help students understand key concepts of operating systems-including file sys
 The system adopts a Client-Server architecture, implemented in C++. All data (papers, reviews, user roles, version history, etc.) must be stored in the server-side file system. The client provides a command-line interface (CLI) and connects to the server over the network to perform various operations.
 The system includes four user roles, each with different permissions. After login, the client CLI should provide role-appropriate commands:
 
-RoleFunctionsAuthorUpload papers, submit revisions, view review status, download review commentsReviewerDownload papers, upload review reports, view review statusEditorAssign reviewers, view review status, make final decisionsAdminUser management, backup management, system status monitoring
+RoleFunctionsAuthorUpload papers, submit revisions, view review status, download review commentsReviewerDownload papers, upload review reports, view review statusEditorAssign reviewers, view review status, make final decisionsAdminUser management, backup management, system status monitoring
 File System Requirements:
 
 * Includes superblock, inode table, data block area, and free-block bitmap

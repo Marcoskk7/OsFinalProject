@@ -3,6 +3,7 @@
 #include "common/protocol.hpp"
 
 #include <string>
+#include <optional>
 
 namespace osp::client
 {
@@ -19,18 +20,21 @@ public:
 
     // 启动交互式命令行循环。
     // - 支持 LOGIN 命令获取会话 ID（session）；
-    // - 对后续业务命令自动在发送前附加 "SESSION <id> CMD ..." 前缀，用户无需手动输入 session。
+    // - 对后续业务命令自动携带 sessionId。
     void run();
 
 private:
-    // 根据当前 sessionId 状态，将用户输入的一行命令封装为实际发送的 payload。
-    // - 未登录或无需携带会话时：直接返回原始行（例如 PING / LOGIN）。
-    // - 已登录且为普通业务命令时：自动封装为 "SESSION <sessionId> CMD <原始命令行>"。
-    [[nodiscard]] std::string buildPayload(const std::string& line) const;
+    // 根据当前 sessionId 状态，将用户输入的一行命令封装为 JSON payload。
+    [[nodiscard]] osp::protocol::json buildJsonPayload(const std::string& line) const;
+
+    // 发送请求并接收响应，返回响应消息
+    std::optional<osp::protocol::Message> sendRequest(const osp::protocol::json& payload);
 
     // 当客户端发送 LOGIN 命令并收到成功响应时，从响应 payload 中解析并保存新的 sessionId。
-    void handleLoginResponse(const std::string& requestLine,
-                             const osp::protocol::Message& resp);
+    void handleLoginResponse(const osp::protocol::Message& resp);
+
+    // 格式化输出 JSON 响应（pretty print 或用户友好的格式）
+    void printResponse(const osp::protocol::Message& resp) const;
 
     // 打印通用指引（PING/LOGIN/退出等）。
     void printGeneralGuide() const;
@@ -60,7 +64,7 @@ private:
     std::string    sessionId_;          // 当前会话 ID，空字符串表示未登录
     std::string    currentUser_;        // 当前登录用户名
     std::string    currentRole_;        // 当前登录角色（Admin / Editor / ...）
-    std::string    currentPath_ = "/";  // 客户端维护的“当前目录”（仅影响默认 LIST 等命令）
+    std::string    currentPath_ = "/";  // 客户端维护的"当前目录"（仅影响默认 LIST 等命令）
 
     // 作者数字菜单的临时状态
     enum class AuthorWizard
@@ -123,6 +127,8 @@ private:
         AssignAskPaperId,
         AssignAskReviewer,
         ViewAskPaperId,
+        ViewPaperAskPaperId,
+        ViewReviewsAskPaperId,
         DecideAskPaperId,
         DecideAskDecision,
         PostAssignPrompt,
@@ -135,5 +141,4 @@ private:
 };
 
 } // namespace osp::client
-
 

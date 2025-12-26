@@ -1,6 +1,7 @@
 #pragma once
 
 #include "types.hpp"
+#include "third_party/json.hpp"
 
 #include <sstream>
 #include <string>
@@ -9,9 +10,10 @@
 namespace osp::protocol
 {
 
+using json = nlohmann::json;
+
 // --------------------- 基础消息封装 ---------------------
 
-// 简化版协议：后续可以根据课程要求扩展为结构化二进制或 JSON 等
 enum class MessageType
 {
     AuthRequest,
@@ -21,32 +23,59 @@ enum class MessageType
     Error
 };
 
+// MessageType <-> string 转换
+inline std::string messageTypeToString(MessageType t)
+{
+    switch (t)
+    {
+    case MessageType::AuthRequest: return "AuthRequest";
+    case MessageType::AuthResponse: return "AuthResponse";
+    case MessageType::CommandRequest: return "CommandRequest";
+    case MessageType::CommandResponse: return "CommandResponse";
+    case MessageType::Error: return "Error";
+    }
+    return "Unknown";
+}
+
+inline MessageType stringToMessageType(const std::string& s)
+{
+    if (s == "AuthRequest") return MessageType::AuthRequest;
+    if (s == "AuthResponse") return MessageType::AuthResponse;
+    if (s == "CommandRequest") return MessageType::CommandRequest;
+    if (s == "CommandResponse") return MessageType::CommandResponse;
+    return MessageType::Error;
+}
+
+// 消息结构：payload 改为 JSON
 struct Message
 {
     MessageType type{};
-    std::string payload; // 暂时使用文本形式，后续可自行扩展
+    json        payload; // JSON 格式的 payload
 };
 
-// 传输层序列化：type 整数 + '\n' + payload
+// 传输层序列化：整个 envelope 为 JSON { "type": "...", "payload": {...} }
 inline std::string serialize(const Message& msg)
 {
-    return std::to_string(static_cast<int>(msg.type)) + '\n' + msg.payload;
+    json envelope;
+    envelope["type"] = messageTypeToString(msg.type);
+    envelope["payload"] = msg.payload;
+    return envelope.dump();
 }
 
 inline Message deserialize(const std::string& data)
 {
-    auto pos = data.find('\n');
     Message msg{};
-    if (pos == std::string::npos)
+    try
+    {
+        json envelope = json::parse(data);
+        msg.type = stringToMessageType(envelope.value("type", "Error"));
+        msg.payload = envelope.value("payload", json::object());
+    }
+    catch (const json::exception&)
     {
         msg.type = MessageType::Error;
-        msg.payload = "Malformed message";
-        return msg;
+        msg.payload = {{"ok", false}, {"error", {{"code", "PARSE_ERROR"}, {"message", "Failed to parse JSON message"}}}};
     }
-
-    int t = std::stoi(data.substr(0, pos));
-    msg.type = static_cast<MessageType>(t);
-    msg.payload = data.substr(pos + 1);
     return msg;
 }
 
@@ -54,9 +83,9 @@ inline Message deserialize(const std::string& data)
 
 // 统一的「命令」抽象：
 // - name      : 命令名（例如 PING / MKDIR / LIST_PAPERS 等）
-// - rawArgs   : 去掉命令名后，整行剩余的字符串（用于 WRITE 等需要保留空格的场景）
-// - args      : 按空格分割 rawArgs 得到的参数数组，适合大多数简单命令使用
-// - sessionId : 可选，会话 ID；当 payload 使用 "SESSION <id> CMD CMD_NAME ..." 形式时填充
+// - rawArgs   : 原始参数字符串（用于 WRITE 等需要保留空格的场景）
+// - args      : 参数数组，适合大多数简单命令使用
+// - sessionId : 可选，会话 ID
 struct Command
 {
     std::string              name;
@@ -65,7 +94,86 @@ struct Command
     std::string              sessionId; // 为空表示未携带 Session
 };
 
+// 从 JSON payload 解析 Command（用于服务端）
+// JSON 格式: { "sessionId": "...", "cmd": "...", "args": [...], "rawArgs": "..." }
+inline Command parseCommandFromJson(const json& payload)
+{
+    Command cmd;
+    
+    // sessionId 可能是 null 或字符串，需要特殊处理
+    if (payload.contains("sessionId") && payload["sessionId"].is_string())
+    {
+        cmd.sessionId = payload["sessionId"].get<std::string>();
+    }
+    // 如果是 null 或不存在，sessionId 保持为空字符串
+    
+    cmd.name = payload.value("cmd", "");
+    cmd.rawArgs = payload.value("rawArgs", "");
+
+    if (payload.contains("args") && payload["args"].is_array())
+    {
+        for (const auto& arg : payload["args"])
+        {
+            if (arg.is_string())
+            {
+                cmd.args.push_back(arg.get<std::string>());
+            }
+        }
+    }
+
+    return cmd;
+}
+
+// 将 Command 转换为 JSON（用于客户端构建请求）
+inline json commandToJson(const Command& cmd)
+{
+    json j;
+    if (!cmd.sessionId.empty())
+    {
+        j["sessionId"] = cmd.sessionId;
+    }
+    else
+    {
+        j["sessionId"] = nullptr;
+    }
+    j["cmd"] = cmd.name;
+    j["args"] = cmd.args;
+    if (!cmd.rawArgs.empty())
+    {
+        j["rawArgs"] = cmd.rawArgs;
+    }
+    return j;
+}
+
+// --------------------- 响应构建辅助函数 ---------------------
+
+// 构建成功响应
+inline Message makeSuccessResponse(const json& data = json::object())
+{
+    Message msg;
+    msg.type = MessageType::CommandResponse;
+    msg.payload = {{"ok", true}, {"data", data}};
+    return msg;
+}
+
+// 构建错误响应
+inline Message makeErrorResponse(const std::string& code, const std::string& message, const json& details = json::object())
+{
+    Message msg;
+    msg.type = MessageType::Error;
+    json error = {{"code", code}, {"message", message}};
+    if (!details.empty())
+    {
+        error["details"] = details;
+    }
+    msg.payload = {{"ok", false}, {"error", error}};
+    return msg;
+}
+
+// --------------------- 兼容旧协议的辅助函数（可选，渐进迁移用）---------------------
+
 // 解析单纯的命令行（不含 SESSION/CMD 前缀）：如 "MKDIR /demo"。
+// 保留用于兼容旧文本格式（可在后续版本移除）
 inline Command parseCommandLine(const std::string& line)
 {
     Command cmd;
@@ -97,7 +205,7 @@ inline Command parseCommandLine(const std::string& line)
 
     cmd.rawArgs = line.substr(argStart);
 
-    // 按空格切分 rawArgs，得到 args（对不含空格的普通参数足够；需要保留空格时用 rawArgs）
+    // 按空格切分 rawArgs，得到 args
     std::istringstream iss(cmd.rawArgs);
     std::string        token;
     while (iss >> token)
@@ -108,92 +216,8 @@ inline Command parseCommandLine(const std::string& line)
     return cmd;
 }
 
-// 从 Message.payload 解析出统一的 Command 结构。
-// 支持两种形式：
-// 1) 无会话： "CMD_NAME arg1 arg2 ..."
-// 2) 携带会话： "SESSION <sessionId> CMD CMD_NAME arg1 arg2 ..."
-inline Command parseCommandPayload(const std::string& payload)
-{
-    Command cmd;
-
-    // 去掉开头空白
-    std::size_t start = payload.find_first_not_of(' ');
-    if (start == std::string::npos)
-    {
-        return cmd; // 空命令
-    }
-
-    constexpr const char* kSessionTag = "SESSION";
-    constexpr const char* kCmdTag = "CMD";
-
-    const auto hasSessionPrefix =
-        payload.compare(start, std::char_traits<char>::length(kSessionTag), kSessionTag) == 0
-        && (start + std::char_traits<char>::length(kSessionTag) >= payload.size()
-            || payload[start + std::char_traits<char>::length(kSessionTag)] == ' ');
-
-    if (!hasSessionPrefix)
-    {
-        // 兼容旧格式：整行就是一个命令
-        return parseCommandLine(payload);
-    }
-
-    // 解析 "SESSION <sessionId> CMD <...>"
-    std::size_t pos = start + std::char_traits<char>::length(kSessionTag);
-
-    // 跳过空格
-    pos = payload.find_first_not_of(' ', pos);
-    if (pos == std::string::npos)
-    {
-        return cmd; // 只有 "SESSION" 没有内容，视为无效
-    }
-
-    // 读取 sessionId（直到下一个空格或行尾）
-    const std::size_t sessionStart = pos;
-    pos = payload.find(' ', pos);
-    if (pos == std::string::npos)
-    {
-        // 只有 "SESSION <id>"，未指定 CMD 和具体命令
-        return cmd;
-    }
-
-    cmd.sessionId = payload.substr(sessionStart, pos - sessionStart);
-    if (cmd.sessionId.empty())
-    {
-        return Command{};
-    }
-
-    // 跳过空格，期望出现 "CMD"
-    pos = payload.find_first_not_of(' ', pos);
-    if (pos == std::string::npos)
-    {
-        return Command{};
-    }
-
-    const auto hasCmdTag =
-        payload.compare(pos, std::char_traits<char>::length(kCmdTag), kCmdTag) == 0
-        && (pos + std::char_traits<char>::length(kCmdTag) >= payload.size()
-            || payload[pos + std::char_traits<char>::length(kCmdTag)] == ' ');
-
-    if (!hasCmdTag)
-    {
-        // 不是期望的 "CMD"，视为格式错误
-        return Command{};
-    }
-
-    // 跳过 "CMD" 及其后的空格，剩余部分为真正的命令行
-    pos += std::char_traits<char>::length(kCmdTag);
-    pos = payload.find_first_not_of(' ', pos);
-    if (pos == std::string::npos)
-    {
-        return Command{}; // 有 CMD 但没有具体命令
-    }
-
-    Command inner = parseCommandLine(payload.substr(pos));
-    inner.sessionId = cmd.sessionId;
-    return inner;
-}
-
-// 便于客户端构造命令：根据 Command 生成 payload 字符串
+// 便于客户端构造命令：根据 Command 生成旧格式 payload 字符串
+// 保留用于兼容旧文本格式（可在后续版本移除）
 inline std::string buildCommandPayload(const Command& cmd)
 {
     std::ostringstream oss;
@@ -219,5 +243,4 @@ inline std::string buildCommandPayload(const Command& cmd)
 }
 
 } // namespace osp::protocol
-
 

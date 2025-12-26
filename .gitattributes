@@ -1,0 +1,94 @@
+# -----------------------------------------------------------------------------
+# .gitattributes
+# 目标：
+# - 统一工作区换行符为 LF（跨平台一致）
+# - 自动规范化文本文件（避免 CRLF/LF 混杂）
+# - 明确二进制文件属性，避免误做换行符转换/差异比较
+#
+# 说明：
+# - text=auto：由 Git 自动识别文本文件并做规范化
+# - eol=lf：检出到工作区时强制使用 LF
+# -----------------------------------------------------------------------------
+
+* text=auto eol=lf
+
+# -----------------------------------------------------------------------------
+# C / C++ / CMake（明确为文本，强制 LF）
+# -----------------------------------------------------------------------------
+*.c            text eol=lf
+*.cc           text eol=lf
+*.cpp          text eol=lf
+*.cxx          text eol=lf
+*.h            text eol=lf
+*.hh           text eol=lf
+*.hpp          text eol=lf
+*.hxx          text eol=lf
+*.inl          text eol=lf
+
+*.cmake        text eol=lf
+CMakeLists.txt text eol=lf
+*.cmake.in     text eol=lf
+
+# -----------------------------------------------------------------------------
+# 脚本（强制 LF；shebang 在跨平台下更稳定）
+# -----------------------------------------------------------------------------
+*.sh           text eol=lf
+*.bash         text eol=lf
+*.zsh          text eol=lf
+*.py           text eol=lf
+*.js           text eol=lf
+*.ts           text eol=lf
+*.mjs          text eol=lf
+*.cjs          text eol=lf
+
+# -----------------------------------------------------------------------------
+# 配置 / 文档（强制 LF）
+# -----------------------------------------------------------------------------
+*.md           text eol=lf
+*.txt          text eol=lf
+*.yml          text eol=lf
+*.yaml         text eol=lf
+*.json         text eol=lf
+*.xml          text eol=lf
+*.toml         text eol=lf
+*.ini          text eol=lf
+*.cfg          text eol=lf
+*.conf         text eol=lf
+*.gitignore    text eol=lf
+*.gitattributes text eol=lf
+
+# -----------------------------------------------------------------------------
+# 常见二进制文件（禁用文本处理，避免换行符转换/错误 diff）
+# -----------------------------------------------------------------------------
+*.png          -text
+*.jpg          -text
+*.jpeg         -text
+*.gif          -text
+*.webp         -text
+*.ico          -text
+*.pdf          -text
+
+*.zip          -text
+*.gz           -text
+*.7z           -text
+*.rar          -text
+
+*.exe          -text
+*.dll          -text
+*.so           -text
+*.dylib        -text
+*.a            -text
+*.lib          -text
+*.o            -text
+*.obj          -text
+
+# -----------------------------------------------------------------------------
+# Git 合并/差异显示（通用建议）
+# -----------------------------------------------------------------------------
+*.lock         text eol=lf
+
+# 让纯文本日志/补丁更好 diff
+*.patch        text eol=lf
+*.diff         text eol=lf
+
+

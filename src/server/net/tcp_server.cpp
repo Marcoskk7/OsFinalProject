@@ -6,14 +6,21 @@
 #include <unistd.h>
 
 #include <cstring>
+#include <memory>
 #include <string>
 
 namespace osp::net
 {
 
-TcpServer::TcpServer(std::uint16_t port) noexcept
+TcpServer::TcpServer(std::uint16_t port, std::size_t poolSize) noexcept
     : port_(port)
+    , poolSize_(poolSize)
 {
+}
+
+TcpServer::~TcpServer()
+{
+    stop();
 }
 
 bool TcpServer::sendAll(int fd, const void* buf, std::size_t len)
@@ -83,44 +90,159 @@ std::optional<osp::protocol::Message> TcpServer::recvMessage(int fd)
     return osp::protocol::deserialize(data);
 }
 
-bool TcpServer::serveOnce(const std::function<osp::protocol::Message(const osp::protocol::Message&)>& handler)
+void TcpServer::handleClient(int clientFd, const RequestHandler& handler)
 {
-    const int listenFd = ::socket(AF_INET, SOCK_STREAM, 0);
-    if (listenFd < 0)
+    osp::log(osp::LogLevel::Info, "TcpServer: handling client on fd " + std::to_string(clientFd));
+
+    // 循环处理该客户端的多个请求（支持持久连接）
+    while (running_.load())
+    {
+        auto maybeReq = recvMessage(clientFd);
+        if (!maybeReq)
+        {
+            osp::log(osp::LogLevel::Info, "TcpServer: client disconnected (fd " + std::to_string(clientFd) + ")");
+            break;
+        }
+
+        const auto& req = *maybeReq;
+        osp::log(osp::LogLevel::Debug, "TcpServer: received request from fd " + std::to_string(clientFd));
+
+        const auto resp = handler(req);
+        if (!sendMessage(clientFd, resp))
+        {
+            osp::log(osp::LogLevel::Warn, "TcpServer: failed to send response to fd " + std::to_string(clientFd));
+            break;
+        }
+    }
+
+    ::close(clientFd);
+    osp::log(osp::LogLevel::Debug, "TcpServer: closed client fd " + std::to_string(clientFd));
+}
+
+void TcpServer::start(const RequestHandler& handler)
+{
+    listenFd_ = ::socket(AF_INET, SOCK_STREAM, 0);
+    if (listenFd_ < 0)
     {
         osp::log(osp::LogLevel::Error, "TcpServer: failed to create socket");
-        return false;
+        return;
     }
 
     int opt = 1;
-    ::setsockopt(listenFd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+    ::setsockopt(listenFd_, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
 
     sockaddr_in addr{};
     addr.sin_family = AF_INET;
     addr.sin_addr.s_addr = htonl(INADDR_ANY);
     addr.sin_port = htons(port_);
 
-    if (::bind(listenFd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0)
+    if (::bind(listenFd_, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0)
     {
         osp::log(osp::LogLevel::Error, "TcpServer: bind failed");
-        ::close(listenFd);
+        ::close(listenFd_);
+        listenFd_ = -1;
+        return;
+    }
+
+    // 增加 backlog 以支持更多并发连接
+    if (::listen(listenFd_, 128) < 0)
+    {
+        osp::log(osp::LogLevel::Error, "TcpServer: listen failed");
+        ::close(listenFd_);
+        listenFd_ = -1;
+        return;
+    }
+
+    running_.store(true);
+    osp::log(osp::LogLevel::Info,
+             "TcpServer: listening on port " + std::to_string(port_)
+                 + " with thread pool size " + std::to_string(poolSize_));
+
+    // 创建线程池
+    osp::ThreadPool pool(poolSize_);
+
+    while (running_.load())
+    {
+        sockaddr_in clientAddr{};
+        socklen_t   clientLen = sizeof(clientAddr);
+
+        const int clientFd = ::accept(listenFd_, reinterpret_cast<sockaddr*>(&clientAddr), &clientLen);
+        if (clientFd < 0)
+        {
+            if (running_.load())
+            {
+                osp::log(osp::LogLevel::Warn, "TcpServer: accept failed");
+            }
+            continue;
+        }
+
+        // 获取客户端地址信息
+        char clientIp[INET_ADDRSTRLEN];
+        inet_ntop(AF_INET, &clientAddr.sin_addr, clientIp, INET_ADDRSTRLEN);
+        osp::log(osp::LogLevel::Info,
+                 "TcpServer: accepted connection from " + std::string(clientIp)
+                     + ":" + std::to_string(ntohs(clientAddr.sin_port)));
+
+        // 提交到线程池处理
+        pool.enqueue([this, clientFd, &handler]() {
+            handleClient(clientFd, handler);
+        });
+    }
+
+    osp::log(osp::LogLevel::Info, "TcpServer: stopped accepting connections");
+}
+
+void TcpServer::stop()
+{
+    running_.store(false);
+
+    // 关闭监听 socket 以中断 accept
+    if (listenFd_ >= 0)
+    {
+        ::close(listenFd_);
+        listenFd_ = -1;
+    }
+}
+
+// 旧接口：保持向后兼容
+bool TcpServer::serveOnce(const RequestHandler& handler)
+{
+    const int sockFd = ::socket(AF_INET, SOCK_STREAM, 0);
+    if (sockFd < 0)
+    {
+        osp::log(osp::LogLevel::Error, "TcpServer: failed to create socket");
         return false;
     }
 
-    if (::listen(listenFd, 1) < 0)
+    int opt = 1;
+    ::setsockopt(sockFd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+
+    sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_ANY);
+    addr.sin_port = htons(port_);
+
+    if (::bind(sockFd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0)
+    {
+        osp::log(osp::LogLevel::Error, "TcpServer: bind failed");
+        ::close(sockFd);
+        return false;
+    }
+
+    if (::listen(sockFd, 1) < 0)
     {
         osp::log(osp::LogLevel::Error, "TcpServer: listen failed");
-        ::close(listenFd);
+        ::close(sockFd);
         return false;
     }
 
     osp::log(osp::LogLevel::Info, "TcpServer: waiting for connection...");
 
-    const int clientFd = ::accept(listenFd, nullptr, nullptr);
+    const int clientFd = ::accept(sockFd, nullptr, nullptr);
     if (clientFd < 0)
     {
         osp::log(osp::LogLevel::Error, "TcpServer: accept failed");
-        ::close(listenFd);
+        ::close(sockFd);
         return false;
     }
 
@@ -129,7 +251,7 @@ bool TcpServer::serveOnce(const std::function<osp::protocol::Message(const osp::
     {
         osp::log(osp::LogLevel::Error, "TcpServer: failed to receive message");
         ::close(clientFd);
-        ::close(listenFd);
+        ::close(sockFd);
         return false;
     }
 
@@ -140,12 +262,9 @@ bool TcpServer::serveOnce(const std::function<osp::protocol::Message(const osp::
     const bool ok = sendMessage(clientFd, resp);
 
     ::close(clientFd);
-    ::close(listenFd);
+    ::close(sockFd);
 
     return ok;
 }
 
 } // namespace osp::net
-
-
-

@@ -5,7 +5,9 @@
 
 #include "common/types.hpp"
 
+#include <functional>
 #include <optional>
+#include <cstddef>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -22,15 +24,34 @@ struct Session
     std::string username;
 };
 
-// 简化版认证服务：
-// - 使用内存中的用户表与 Session 表；
-// - 后续可以替换为基于自定义文件系统的持久化用户存储。
+// VFS 操作接口，用于解耦 AuthService 与具体 VFS 实现
+struct VfsOperations
+{
+    std::function<bool(const std::string&)>                         createDirectory;
+    std::function<bool(const std::string&, const std::string&)>     writeFile;
+    std::function<std::optional<std::string>(const std::string&)>   readFile;
+    std::function<bool(const std::string&)>                         removeFile;
+    std::function<std::optional<std::string>(const std::string&)>   listDirectory;
+};
+
+// 认证服务：
+// - 用户数据存储在 VFS 文件系统中（持久化）
+// - 会话数据存储在内存中（临时）
 class AuthService
 {
 public:
     AuthService();
 
-    // 添加一个用户（可用于初始化内置账号）。
+    // 设置 VFS 操作接口，启用持久化
+    void setVfsOperations(const VfsOperations& ops);
+
+    // 检查是否已启用持久化
+    [[nodiscard]] bool isPersistenceEnabled() const noexcept { return persistenceEnabled_; }
+
+    // 从 VFS 加载用户数据
+    bool loadUsers();
+
+    // 添加一个用户（可用于初始化内置账号）
     void addUser(const std::string& username,
                  const std::string& password,
                  Role               role);
@@ -56,6 +77,9 @@ public:
     // 根据会话 ID 查找已有 Session，用于后续请求的鉴权。
     std::optional<Session> validateSession(const std::string& sessionId) const;
 
+    // 当前活跃会话数（用于系统状态监控）
+    [[nodiscard]] std::size_t sessionCount() const noexcept { return sessionsById_.size(); }
+
 private:
     struct StoredUser
     {
@@ -65,15 +89,32 @@ private:
         Role        role{Role::Author};
     };
 
+    // 保存单个用户到 VFS
+    bool saveUser(const StoredUser& user);
+
+    // 从 VFS 删除单个用户文件
+    bool deleteUserFile(const std::string& username);
+
+    // 保存 nextUserId 到 VFS
+    bool saveNextUserId();
+
+    // 加载 nextUserId 从 VFS
+    bool loadNextUserId();
+
     std::unordered_map<std::string, StoredUser> usersByName_; // username -> StoredUser
     std::unordered_map<std::string, Session>    sessionsById_; // sessionId -> Session
 
     UserId nextUserId_{1};
 
+    // VFS 操作接口
+    VfsOperations vfsOps_;
+    bool          persistenceEnabled_{false};
+
+    // 用户数据存储路径
+    static constexpr const char* kUsersDir = "/system/users";
+    static constexpr const char* kNextUserIdPath = "/system/next_user_id";
+
     [[nodiscard]] std::string generateSessionId() const;
 };
 
 } // namespace osp::domain
-
-
-

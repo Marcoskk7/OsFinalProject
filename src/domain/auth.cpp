@@ -18,15 +18,203 @@ std::string makeSessionId(UserId userId)
     return oss.str();
 }
 
+// Role 转字符串
+std::string roleToString(Role role)
+{
+    switch (role)
+    {
+    case Role::Author: return "Author";
+    case Role::Reviewer: return "Reviewer";
+    case Role::Editor: return "Editor";
+    case Role::Admin: return "Admin";
+    }
+    return "Author";
+}
+
+// 字符串转 Role
+Role stringToRole(const std::string& s)
+{
+    if (s == "Reviewer") return Role::Reviewer;
+    if (s == "Editor") return Role::Editor;
+    if (s == "Admin") return Role::Admin;
+    return Role::Author;
+}
+
 } // namespace
 
 AuthService::AuthService() = default;
+
+void AuthService::setVfsOperations(const VfsOperations& ops)
+{
+    vfsOps_ = ops;
+    persistenceEnabled_ = true;
+}
+
+bool AuthService::loadUsers()
+{
+    if (!persistenceEnabled_)
+    {
+        return false;
+    }
+
+    // 确保用户目录存在
+    vfsOps_.createDirectory("/system");
+    vfsOps_.createDirectory(kUsersDir);
+
+    // 加载 nextUserId
+    loadNextUserId();
+
+    // 列出用户目录
+    auto listing = vfsOps_.listDirectory(kUsersDir);
+    if (!listing)
+    {
+        return true; // 目录为空或不存在，正常情况
+    }
+
+    std::stringstream ss(*listing);
+    std::string       entry;
+
+    while (std::getline(ss, entry))
+    {
+        if (entry.empty() || entry.back() == '/')
+        {
+            continue; // 跳过目录
+        }
+
+        // 移除 .txt 后缀得到用户名
+        if (entry.size() > 4 && entry.substr(entry.size() - 4) == ".txt")
+        {
+            std::string username = entry.substr(0, entry.size() - 4);
+            std::string userPath = std::string(kUsersDir) + "/" + entry;
+
+            auto userData = vfsOps_.readFile(userPath);
+            if (!userData)
+            {
+                continue;
+            }
+
+            // 解析用户数据：id\npassword\nrole
+            std::stringstream uss(*userData);
+            std::string       idStr;
+            std::string       password;
+            std::string       roleStr;
+
+            if (!std::getline(uss, idStr) || !std::getline(uss, password) || !std::getline(uss, roleStr))
+            {
+                continue;
+            }
+
+            StoredUser user;
+            try
+            {
+                user.id = static_cast<UserId>(std::stoul(idStr));
+            }
+            catch (...)
+            {
+                continue;
+            }
+            user.username = username;
+            user.password = password;
+            user.role = stringToRole(roleStr);
+
+            usersByName_[username] = user;
+
+            // 确保 nextUserId_ 大于所有已加载的用户 ID
+            if (user.id >= nextUserId_)
+            {
+                nextUserId_ = user.id + 1;
+            }
+        }
+    }
+
+    return true;
+}
+
+bool AuthService::saveUser(const StoredUser& user)
+{
+    if (!persistenceEnabled_)
+    {
+        return true; // 未启用持久化，静默成功
+    }
+
+    // 确保目录存在
+    vfsOps_.createDirectory("/system");
+    vfsOps_.createDirectory(kUsersDir);
+
+    std::string userPath = std::string(kUsersDir) + "/" + user.username + ".txt";
+
+    // 用户数据格式：id\npassword\nrole
+    std::ostringstream oss;
+    oss << user.id << "\n"
+        << user.password << "\n"
+        << roleToString(user.role);
+
+    return vfsOps_.writeFile(userPath, oss.str());
+}
+
+bool AuthService::deleteUserFile(const std::string& username)
+{
+    if (!persistenceEnabled_)
+    {
+        return true;
+    }
+
+    std::string userPath = std::string(kUsersDir) + "/" + username + ".txt";
+    return vfsOps_.removeFile(userPath);
+}
+
+bool AuthService::saveNextUserId()
+{
+    if (!persistenceEnabled_)
+    {
+        return true;
+    }
+
+    vfsOps_.createDirectory("/system");
+    return vfsOps_.writeFile(kNextUserIdPath, std::to_string(nextUserId_));
+}
+
+bool AuthService::loadNextUserId()
+{
+    if (!persistenceEnabled_)
+    {
+        return true;
+    }
+
+    auto data = vfsOps_.readFile(kNextUserIdPath);
+    if (!data)
+    {
+        return false;
+    }
+
+    try
+    {
+        nextUserId_ = static_cast<UserId>(std::stoul(*data));
+    }
+    catch (...)
+    {
+        return false;
+    }
+
+    return true;
+}
 
 void AuthService::addUser(const std::string& username,
                           const std::string& password,
                           Role               role)
 {
-    // 若用户名已存在，则简单覆盖（用于重复初始化场景）
+    // 检查用户是否已存在
+    auto it = usersByName_.find(username);
+    if (it != usersByName_.end())
+    {
+        // 用户已存在，更新密码和角色
+        it->second.password = password;
+        it->second.role = role;
+        saveUser(it->second);
+        return;
+    }
+
+    // 创建新用户
     StoredUser u;
     u.id = nextUserId_++;
     u.username = username;
@@ -34,6 +222,10 @@ void AuthService::addUser(const std::string& username,
     u.role = role;
 
     usersByName_[username] = u;
+
+    // 持久化
+    saveUser(u);
+    saveNextUserId();
 }
 
 std::optional<Session> AuthService::login(const osp::Credentials& credentials)
@@ -87,6 +279,10 @@ bool AuthService::removeUser(const std::string& username)
     {
         return false;
     }
+
+    // 从 VFS 删除用户文件
+    deleteUserFile(username);
+
     usersByName_.erase(it);
     return true;
 }
@@ -98,7 +294,12 @@ bool AuthService::updateUserRole(const std::string& username, Role role)
     {
         return false;
     }
+
     it->second.role = role;
+
+    // 持久化更新
+    saveUser(it->second);
+
     return true;
 }
 
@@ -109,7 +310,12 @@ bool AuthService::resetUserPassword(const std::string& username, const std::stri
     {
         return false;
     }
+
     it->second.password = newPassword;
+
+    // 持久化更新
+    saveUser(it->second);
+
     return true;
 }
 
@@ -135,6 +341,3 @@ std::string AuthService::generateSessionId() const
 }
 
 } // namespace osp::domain
-
-
-
