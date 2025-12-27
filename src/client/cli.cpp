@@ -360,6 +360,8 @@ void Cli::printAuthorNumericMenu() const
 
 bool Cli::handleAuthorMenuInput(const std::string& line)
 {
+    using osp::protocol::json;
+    
     auto trim = [](const std::string& s) {
         std::size_t b = s.find_first_not_of(" \t\r\n");
         if (b == std::string::npos) return std::string{};
@@ -443,6 +445,35 @@ bool Cli::handleAuthorMenuInput(const std::string& line)
                 std::cout << "paper_id 不能为空。重新输入 paper_id: ";
                 return true;
             }
+            // 验证paper_id是否属于当前用户
+            {
+                auto payload = buildJsonPayload("GET_PAPER " + tempPaperId_);
+                if (auto resp = sendRequest(payload))
+                {
+                    // 检查响应是否成功
+                    if (!resp->payload.value("ok", false))
+                    {
+                        // 检查是否是权限错误或未找到错误
+                        const auto& error = resp->payload.value("error", json::object());
+                        const std::string errorCode = error.value("code", "");
+                        if (errorCode == "PERMISSION_DENIED" || errorCode == "NOT_FOUND")
+                        {
+                            std::cout << "不是你的论文\n";
+                            std::cout << "输入 c 继续提交修订，m 返回作者菜单，其他退出向导: ";
+                            authorWizard_ = AuthorWizard::PostRevisePrompt;
+                            return true;
+                        }
+                    }
+                }
+                else
+                {
+                    std::cout << "验证失败，无法连接到服务器\n";
+                    std::cout << "输入 c 继续提交修订，m 返回作者菜单，其他退出向导: ";
+                    authorWizard_ = AuthorWizard::PostRevisePrompt;
+                    return true;
+                }
+            }
+            // 验证通过，继续输入内容
             std::cout << "输入修订后的论文内容（可包含空格）: ";
             authorWizard_ = AuthorWizard::ReviseAskContent;
             return true;
