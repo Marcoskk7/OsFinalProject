@@ -4,6 +4,10 @@
 #include "domain/permissions.hpp"
 #include "domain/review.hpp"
 
+#include <algorithm>
+#include <cctype>
+#include <set>
+#include <vector>
 #include <sstream>
 #include <cstdlib>
 #include <filesystem>
@@ -41,6 +45,73 @@ std::size_t clampCacheCapacity(std::size_t v)
     constexpr std::size_t kMax = 4096;
     if (v > kMax) return kMax;
     return v;
+}
+
+std::string trimCopy(const std::string& s)
+{
+    std::size_t b = 0;
+    while (b < s.size() && std::isspace(static_cast<unsigned char>(s[b]))) ++b;
+    std::size_t e = s.size();
+    while (e > b && std::isspace(static_cast<unsigned char>(s[e - 1]))) --e;
+    return s.substr(b, e - b);
+}
+
+std::string normalizeFieldToken(std::string s)
+{
+    s = trimCopy(s);
+    for (char& c : s)
+    {
+        c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+    }
+    return s;
+}
+
+std::vector<std::string> splitFieldsCsv(const std::string& csv)
+{
+    std::vector<std::string> out;
+    std::string current;
+    for (char ch : csv)
+    {
+        if (ch == ',')
+        {
+            std::string tok = normalizeFieldToken(current);
+            if (!tok.empty()) out.push_back(tok);
+            current.clear();
+            continue;
+        }
+        current.push_back(ch);
+    }
+    {
+        std::string tok = normalizeFieldToken(current);
+        if (!tok.empty()) out.push_back(tok);
+    }
+    // de-dup while keeping stable order
+    std::set<std::string> seen;
+    std::vector<std::string> unique;
+    unique.reserve(out.size());
+    for (const auto& f : out)
+    {
+        if (seen.insert(f).second)
+        {
+            unique.push_back(f);
+        }
+    }
+    return unique;
+}
+
+std::set<std::string> toFieldSet(const std::vector<std::string>& v)
+{
+    return std::set<std::string>(v.begin(), v.end());
+}
+
+std::vector<std::string> intersectionFields(const std::set<std::string>& a, const std::set<std::string>& b)
+{
+    std::vector<std::string> out;
+    for (const auto& x : a)
+    {
+        if (b.count(x)) out.push_back(x);
+    }
+    return out;
 }
 } // namespace
 
@@ -229,9 +300,140 @@ osp::protocol::Message ServerApp::handleCommand(const osp::protocol::Command&   
     // 论文相关命令
     if (cmd.name == "LIST_PAPERS" || cmd.name == "SUBMIT" || cmd.name == "GET_PAPER"
         || cmd.name == "ASSIGN" || cmd.name == "REVIEW" || cmd.name == "LIST_REVIEWS"
-        || cmd.name == "DECISION" || cmd.name == "REVISE")
+        || cmd.name == "DECISION" || cmd.name == "REVISE" || cmd.name == "SET_PAPER_FIELDS")
     {
         return handlePaperCommand(cmd, maybeSession);
+    }
+
+    if (cmd.name == "RECOMMEND_REVIEWERS")
+    {
+        if (!maybeSession)
+        {
+            return osp::protocol::makeErrorResponse("AUTH_REQUIRED", "RECOMMEND_REVIEWERS: need to login first");
+        }
+        if (maybeSession->role != osp::Role::Editor && maybeSession->role != osp::Role::Admin)
+        {
+            return osp::protocol::makeErrorResponse("PERMISSION_DENIED", "RECOMMEND_REVIEWERS: permission denied");
+        }
+        if (cmd.args.empty())
+        {
+            return osp::protocol::makeErrorResponse("MISSING_ARGS", "Usage: RECOMMEND_REVIEWERS <PaperID> [limit]");
+        }
+
+        const std::string pidStr = cmd.args[0];
+        std::size_t limit = 5;
+        if (cmd.args.size() >= 2)
+        {
+            try
+            {
+                limit = static_cast<std::size_t>(std::stoul(cmd.args[1]));
+            }
+            catch (...)
+            {
+                return osp::protocol::makeErrorResponse("INVALID_ARGS", "RECOMMEND_REVIEWERS: invalid limit");
+            }
+            if (limit == 0) limit = 5;
+        }
+
+        // Load paper fields
+        std::set<std::string> paperFields;
+        {
+            std::lock_guard<std::mutex> lock(vfsMutex_);
+            const std::string metaPath = "/papers/" + pidStr + "/meta.txt";
+            if (!vfs_.readFile(metaPath))
+            {
+                return osp::protocol::makeErrorResponse("NOT_FOUND", "Paper not found: " + pidStr);
+            }
+
+            const std::string fieldsPath = "/papers/" + pidStr + "/fields.txt";
+            if (auto f = vfs_.readFile(fieldsPath))
+            {
+                paperFields = toFieldSet(splitFieldsCsv(*f));
+            }
+        }
+
+        struct ReviewerInfo
+        {
+            std::string username;
+            std::uint32_t userId{};
+        };
+        std::vector<ReviewerInfo> reviewers;
+        {
+            std::lock_guard<std::mutex> lock(authMutex_);
+            for (const auto& u : auth_.getAllUsers())
+            {
+                if (u.role() != osp::Role::Reviewer) continue;
+                reviewers.push_back({u.username(), u.id()});
+            }
+        }
+
+        struct Candidate
+        {
+            std::string username;
+            std::uint32_t userId{};
+            std::size_t score{};
+            std::vector<std::string> matched;
+            std::vector<std::string> reviewerFields;
+        };
+
+        std::vector<Candidate> candidates;
+        candidates.reserve(reviewers.size());
+
+        for (const auto& r : reviewers)
+        {
+            std::set<std::string> reviewerFieldSet;
+            std::vector<std::string> reviewerFields;
+            {
+                std::lock_guard<std::mutex> lock(vfsMutex_);
+                vfs_.createDirectory("/system");
+                vfs_.createDirectory("/system/reviewer_fields");
+                const std::string path = "/system/reviewer_fields/" + std::to_string(r.userId) + ".txt";
+                if (auto f = vfs_.readFile(path))
+                {
+                    reviewerFields = splitFieldsCsv(*f);
+                    reviewerFieldSet = toFieldSet(reviewerFields);
+                }
+            }
+
+            auto matched = intersectionFields(paperFields, reviewerFieldSet);
+            const std::size_t score = matched.size();
+            candidates.push_back({r.username, r.userId, score, matched, reviewerFields});
+        }
+
+        std::sort(candidates.begin(), candidates.end(), [](const Candidate& a, const Candidate& b) {
+            if (a.score != b.score) return a.score > b.score;
+            return a.username < b.username;
+        });
+
+        if (candidates.size() > limit)
+        {
+            candidates.resize(limit);
+        }
+
+        json out;
+        out["paperId"] = pidStr;
+        {
+            json pf = json::array();
+            for (const auto& f : paperFields) pf.push_back(f);
+            out["paperFields"] = pf;
+        }
+        json arr = json::array();
+        for (const auto& c : candidates)
+        {
+            json m = json::array();
+            for (const auto& f : c.matched) m.push_back(f);
+            json rf = json::array();
+            for (const auto& f : c.reviewerFields) rf.push_back(f);
+            arr.push_back({
+                {"username", c.username},
+                {"userId", c.userId},
+                {"score", c.score},
+                {"matchedFields", m},
+                {"reviewerFields", rf}
+            });
+        }
+        out["candidates"] = arr;
+        return osp::protocol::makeSuccessResponse(out);
     }
 
     // Editor 便捷封装命令
@@ -284,10 +486,9 @@ osp::protocol::Message ServerApp::handleCommand(const osp::protocol::Command&   
         
         const std::string& subcmd = cmd.args[0];
         
-        std::lock_guard<std::mutex> lock(authMutex_);
-        
         if (subcmd == "LIST")
         {
+            std::lock_guard<std::mutex> lock(authMutex_);
             auto users = auth_.getAllUsers();
             json userList = json::array();
             for (const auto& user : users)
@@ -309,8 +510,9 @@ osp::protocol::Message ServerApp::handleCommand(const osp::protocol::Command&   
             const std::string& username = cmd.args[1];
             const std::string& password = cmd.args[2];
             const std::string& roleStr = cmd.args[3];
-            
+
             osp::Role role = stringToRole(roleStr);
+            std::lock_guard<std::mutex> lock(authMutex_);
             auth_.addUser(username, password, role);
             return osp::protocol::makeSuccessResponse({{"message", "User added"}, {"username", username}});
         }
@@ -321,6 +523,7 @@ osp::protocol::Message ServerApp::handleCommand(const osp::protocol::Command&   
                 return osp::protocol::makeErrorResponse("MISSING_ARGS", "MANAGE_USERS REMOVE: missing username");
             }
             const std::string& username = cmd.args[1];
+            std::lock_guard<std::mutex> lock(authMutex_);
             if (auth_.removeUser(username))
             {
                 return osp::protocol::makeSuccessResponse({{"message", "User removed"}, {"username", username}});
@@ -338,8 +541,9 @@ osp::protocol::Message ServerApp::handleCommand(const osp::protocol::Command&   
             }
             const std::string& username = cmd.args[1];
             const std::string& roleStr = cmd.args[2];
-            
+
             osp::Role role = stringToRole(roleStr);
+            std::lock_guard<std::mutex> lock(authMutex_);
             if (auth_.updateUserRole(username, role))
             {
                 return osp::protocol::makeSuccessResponse({{"message", "Role updated"}, {"username", username}, {"role", roleStr}});
@@ -357,7 +561,8 @@ osp::protocol::Message ServerApp::handleCommand(const osp::protocol::Command&   
             }
             const std::string& username = cmd.args[1];
             const std::string& newPassword = cmd.args[2];
-            
+
+            std::lock_guard<std::mutex> lock(authMutex_);
             if (auth_.resetUserPassword(username, newPassword))
             {
                 return osp::protocol::makeSuccessResponse({{"message", "Password reset"}, {"username", username}});
@@ -366,6 +571,54 @@ osp::protocol::Message ServerApp::handleCommand(const osp::protocol::Command&   
             {
                 return osp::protocol::makeErrorResponse("NOT_FOUND", "MANAGE_USERS RESET_PASSWORD failed: user not found");
             }
+        }
+        else if (subcmd == "UPDATE_FIELDS")
+        {
+            if (cmd.args.size() < 3)
+            {
+                return osp::protocol::makeErrorResponse("MISSING_ARGS", "MANAGE_USERS UPDATE_FIELDS: missing username or fields");
+            }
+            const std::string& username = cmd.args[1];
+            const std::string& fieldsCsv = cmd.args[2];
+
+            std::optional<osp::UserId> userIdOpt;
+            {
+                std::lock_guard<std::mutex> lock(authMutex_);
+                userIdOpt = auth_.getUserId(username);
+            }
+            if (!userIdOpt)
+            {
+                return osp::protocol::makeErrorResponse("NOT_FOUND", "MANAGE_USERS UPDATE_FIELDS: user not found");
+            }
+
+            std::string toWrite;
+            if (fieldsCsv == "NONE" || fieldsCsv == "none" || fieldsCsv == "-")
+            {
+                toWrite = "";
+            }
+            else
+            {
+                // Normalize and store as comma-separated tokens
+                auto fields = splitFieldsCsv(fieldsCsv);
+                for (std::size_t i = 0; i < fields.size(); ++i)
+                {
+                    if (i) toWrite += ',';
+                    toWrite += fields[i];
+                }
+            }
+
+            {
+                std::lock_guard<std::mutex> lock(vfsMutex_);
+                vfs_.createDirectory("/system");
+                vfs_.createDirectory("/system/reviewer_fields");
+                const std::string path = "/system/reviewer_fields/" + std::to_string(*userIdOpt) + ".txt";
+                if (!vfs_.writeFile(path, toWrite))
+                {
+                    return osp::protocol::makeErrorResponse("FS_ERROR", "MANAGE_USERS UPDATE_FIELDS: failed to save fields");
+                }
+            }
+
+            return osp::protocol::makeSuccessResponse({{"message", "Fields updated"}, {"username", username}, {"fields", toWrite}});
         }
         else
         {
@@ -699,6 +952,92 @@ ServerApp::handlePaperCommand(const osp::protocol::Command&                     
         return osp::protocol::makeSuccessResponse({{"papers", papers}});
     }
 
+    if (cmd.name == "SET_PAPER_FIELDS")
+    {
+        if (!maybeSession)
+        {
+            return osp::protocol::makeErrorResponse("AUTH_REQUIRED", "Authentication required");
+        }
+        if (cmd.args.empty())
+        {
+            return osp::protocol::makeErrorResponse("MISSING_ARGS", "Usage: SET_PAPER_FIELDS <PaperID> <fieldsCsv|NONE>");
+        }
+
+        const std::string pidStr = cmd.args[0];
+        const std::string paperDir = "/papers/" + pidStr;
+        const std::string metaPath = paperDir + "/meta.txt";
+
+        std::optional<std::string> metaData;
+        {
+            std::lock_guard<std::mutex> lock(vfsMutex_);
+            metaData = vfs_.readFile(metaPath);
+        }
+        if (!metaData)
+        {
+            return osp::protocol::makeErrorResponse("NOT_FOUND", "Paper not found");
+        }
+
+        std::stringstream metaSS(*metaData);
+        std::uint32_t     p_id;
+        std::uint32_t     p_authorId;
+        metaSS >> p_id >> p_authorId;
+
+        const bool isAdmin  = (maybeSession->role == osp::Role::Admin);
+        const bool isEditor = (maybeSession->role == osp::Role::Editor);
+        const bool isAuthor = (maybeSession->role == osp::Role::Author);
+
+        if (isAuthor && p_authorId != maybeSession->userId)
+        {
+            return osp::protocol::makeErrorResponse("PERMISSION_DENIED", "Permission denied: You can only modify your own papers");
+        }
+        if (!isAdmin && !isEditor && !isAuthor)
+        {
+            return osp::protocol::makeErrorResponse("PERMISSION_DENIED", "Permission denied");
+        }
+
+        std::string fieldsCsv;
+        if (cmd.args.size() >= 2)
+        {
+            fieldsCsv = cmd.args[1];
+        }
+
+        std::string toWrite;
+        if (fieldsCsv.empty() || fieldsCsv == "NONE" || fieldsCsv == "none" || fieldsCsv == "-")
+        {
+            toWrite = "";
+        }
+        else
+        {
+            auto fields = splitFieldsCsv(fieldsCsv);
+            for (std::size_t i = 0; i < fields.size(); ++i)
+            {
+                if (i) toWrite += ',';
+                toWrite += fields[i];
+            }
+        }
+
+        const std::string fieldsPath = paperDir + "/fields.txt";
+        {
+            std::lock_guard<std::mutex> lock(vfsMutex_);
+            if (!vfs_.writeFile(fieldsPath, toWrite))
+            {
+                return osp::protocol::makeErrorResponse("FS_ERROR", "Failed to save paper fields");
+            }
+        }
+
+        json fieldsArr = json::array();
+        for (const auto& f : splitFieldsCsv(toWrite))
+        {
+            fieldsArr.push_back(f);
+        }
+
+        return osp::protocol::makeSuccessResponse({
+            {"message", "Paper fields updated"},
+            {"paperId", pidStr},
+            {"fields", fieldsArr}
+        });
+    }
+
     if (cmd.name == "GET_PAPER")
     {
         if (cmd.args.empty())
@@ -708,11 +1047,14 @@ ServerApp::handlePaperCommand(const osp::protocol::Command&                     
 
         std::string pidStr   = cmd.args[0];
         std::string metaPath = "/papers/" + pidStr + "/meta.txt";
+        std::string fieldsPath = "/papers/" + pidStr + "/fields.txt";
 
         std::optional<std::string> metaData;
+        std::optional<std::string> fieldsData;
         {
             std::lock_guard<std::mutex> lock(vfsMutex_);
             metaData = vfs_.readFile(metaPath);
+            fieldsData = vfs_.readFile(fieldsPath);
         }
         
         if (!metaData)
@@ -779,6 +1121,16 @@ ServerApp::handlePaperCommand(const osp::protocol::Command&                     
         data["status"] = p_status;
         data["authorId"] = p_authorId;
         data["content"] = contentData ? *contentData : "";
+
+        json fieldsArr = json::array();
+        if (fieldsData)
+        {
+            for (const auto& f : splitFieldsCsv(*fieldsData))
+            {
+                fieldsArr.push_back(f);
+            }
+        }
+        data["fields"] = fieldsArr;
 
         return osp::protocol::makeSuccessResponse(data);
     }

@@ -157,7 +157,8 @@ app.post('/api/login', async (req, res) => {
     if (!data.sessionId || !data.role) {
       return res.status(401).json({ ok: false, error: 'Login failed: missing sessionId/role in response', raw: resp });
     }
-    const legacy = `SESSION ${data.sessionId} ROLE ${data.role} USER ${data.username || username} USERID ${data.userId ?? ''}`.trim();
+    const userId = (data.userId !== undefined && data.userId !== null) ? data.userId : '';
+    const legacy = `SESSION ${data.sessionId} ROLE ${data.role} USER ${data.username || username} USERID ${userId}`.trim();
     return res.json({ ok: true, type: resp.type, payload: legacy, data });
   } catch (err) {
     res.status(502).json({ ok: false, error: err.message });

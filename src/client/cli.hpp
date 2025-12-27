@@ -3,6 +3,7 @@
 #include "common/protocol.hpp"
 
 #include <string>
+#include <set>
 #include <optional>
 
 namespace osp::client
@@ -71,6 +72,7 @@ private:
     {
         None,
         SubmitAskTitle,
+        SubmitAskFields,
         SubmitAskContent,
         ViewAskPaperId,
         ViewReviewsAskPaperId,
@@ -83,6 +85,7 @@ private:
     };
     AuthorWizard authorWizard_ = AuthorWizard::None;
     std::string  tempTitle_;
+    std::string  tempFieldsCsv_;
 
     // 审稿人数字菜单的临时状态
     enum class ReviewerWizard
@@ -103,9 +106,11 @@ private:
         None,
         AddReviewerAskName,
         AddReviewerAskPassword,
+        AddReviewerAskFields,
         RemoveUserAskName,
         UpdateRoleAskName,
         UpdateRoleAskRole,
+        UpdateRoleAskFields,
         ResetPwdAskName,
         ResetPwdAskNewPwd,
         BackupAskPath,
@@ -122,12 +127,14 @@ private:
     std::string  tempPassword_;
     std::string  tempRole_;
     std::string  tempPath_;
+    std::set<std::string> tempFields_;
 
     // 编辑数字菜单的临时状态
     enum class EditorWizard
     {
         None,
         AssignAskPaperId,
+        AssignPickRecommended,
         AssignAskReviewer,
         ViewAskPaperId,
         ViewPaperAskPaperId,

@@ -5,8 +5,10 @@
 
 #include <cctype>
 #include <iostream>
+#include <set>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace osp::client
 {
@@ -76,6 +78,68 @@ bool isCdCommand(std::string_view line)
         }
     }
     return true;
+}
+
+struct FieldOption
+{
+    int         id;
+    const char* code;
+    const char* label;
+};
+
+const std::vector<FieldOption>& fieldOptions()
+{
+    static const std::vector<FieldOption> k = {
+        {1, "OS", "Operating Systems"},
+        {2, "NET", "Networks"},
+        {3, "DB", "Databases"},
+        {4, "SEC", "Security"},
+        {5, "AI", "Artificial Intelligence"},
+        {6, "ML", "Machine Learning"},
+    };
+    return k;
+}
+
+std::string joinCsv(const std::vector<std::string>& items)
+{
+    std::string out;
+    for (std::size_t i = 0; i < items.size(); ++i)
+    {
+        if (i) out += ',';
+        out += items[i];
+    }
+    return out;
+}
+
+std::string toUpperCopy(std::string s)
+{
+    for (char& c : s)
+    {
+        c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+    }
+    return s;
+}
+
+std::vector<std::string> splitTokens(const std::string& s)
+{
+    // Split on spaces and commas.
+    std::vector<std::string> out;
+    std::string cur;
+    for (char ch : s)
+    {
+        if (std::isspace(static_cast<unsigned char>(ch)) || ch == ',')
+        {
+            if (!cur.empty())
+            {
+                out.push_back(cur);
+                cur.clear();
+            }
+            continue;
+        }
+        cur.push_back(ch);
+    }
+    if (!cur.empty()) out.push_back(cur);
+    return out;
 }
 
 } // namespace
@@ -377,9 +441,104 @@ bool Cli::handleAuthorMenuInput(const std::string& line)
         {
         case AuthorWizard::SubmitAskTitle:
             tempTitle_ = t;
-            std::cout << "输入论文内容（可包含空格）: ";
-            authorWizard_ = AuthorWizard::SubmitAskContent;
+            tempFieldsCsv_.clear();
+            std::cout << "选择研究领域（可多选）：\n";
+            for (const auto& opt : fieldOptions())
+            {
+                std::cout << "  " << opt.id << ") " << opt.code << " - " << opt.label << "\n";
+            }
+            std::cout << "输入编号或代码（可用空格/逗号分隔多选），直接回车表示不确定方向，输入 done 结束选择: ";
+            authorWizard_ = AuthorWizard::SubmitAskFields;
             return true;
+
+        case AuthorWizard::SubmitAskFields:
+        {
+            // empty -> no field specified
+            if (t.empty())
+            {
+                tempFieldsCsv_.clear();
+                std::cout << "输入论文内容（可包含空格）: ";
+                authorWizard_ = AuthorWizard::SubmitAskContent;
+                return true;
+            }
+
+            const std::string upper = toUpperCopy(t);
+            if (upper == "DONE" || upper == "D")
+            {
+                std::cout << "已选择领域: " << (tempFieldsCsv_.empty() ? "(none)" : tempFieldsCsv_) << "\n";
+                std::cout << "输入论文内容（可包含空格）: ";
+                authorWizard_ = AuthorWizard::SubmitAskContent;
+                return true;
+            }
+
+            // Parse tokens and accumulate
+            std::set<std::string> chosen;
+            if (!tempFieldsCsv_.empty())
+            {
+                for (const auto& tok : splitTokens(tempFieldsCsv_))
+                {
+                    chosen.insert(toUpperCopy(tok));
+                }
+            }
+
+            for (const auto& tokRaw : splitTokens(t))
+            {
+                const std::string tok = toUpperCopy(tokRaw);
+                // number?
+                bool mapped = false;
+                try
+                {
+                    int id = std::stoi(tok);
+                    for (const auto& opt : fieldOptions())
+                    {
+                        if (opt.id == id)
+                        {
+                            chosen.insert(opt.code);
+                            mapped = true;
+                            break;
+                        }
+                    }
+                }
+                catch (...)
+                {
+                    // not a number
+                }
+
+                if (!mapped)
+                {
+                    // accept direct code if exists
+                    for (const auto& opt : fieldOptions())
+                    {
+                        if (tok == opt.code)
+                        {
+                            chosen.insert(opt.code);
+                            mapped = true;
+                            break;
+                        }
+                    }
+                }
+
+                if (!mapped)
+                {
+                    std::cout << "未知领域选项: " << tokRaw << "（忽略）\n";
+                }
+            }
+
+            std::vector<std::string> ordered;
+            for (const auto& opt : fieldOptions())
+            {
+                if (chosen.count(opt.code))
+                {
+                    ordered.push_back(opt.code);
+                }
+            }
+            tempFieldsCsv_ = joinCsv(ordered);
+
+            std::cout << "当前选择: " << (tempFieldsCsv_.empty() ? "(none)" : tempFieldsCsv_) << "\n";
+            std::cout << "继续选择领域（或输入 done 结束，直接回车表示结束并使用当前选择）: ";
+            return true;
+        }
+
         case AuthorWizard::SubmitAskContent:
         {
             const std::string content = t;
@@ -399,6 +558,45 @@ bool Cli::handleAuthorMenuInput(const std::string& line)
             if (auto resp = sendRequest(payload))
             {
                 printResponse(*resp);
+
+                // If submit succeeded and fields were chosen, set fields metadata.
+                if (resp->payload.value("ok", false) && !tempFieldsCsv_.empty())
+                {
+                    const auto& data = resp->payload.value("data", osp::protocol::json::object());
+                    std::string paperId;
+                    if (data.contains("paperId"))
+                    {
+                        if (data["paperId"].is_number_unsigned())
+                        {
+                            paperId = std::to_string(data["paperId"].get<std::uint32_t>());
+                        }
+                        else if (data["paperId"].is_number_integer())
+                        {
+                            paperId = std::to_string(data["paperId"].get<std::int32_t>());
+                        }
+                        else if (data["paperId"].is_string())
+                        {
+                            paperId = data["paperId"].get<std::string>();
+                        }
+                    }
+
+                    if (!paperId.empty())
+                    {
+                        auto setPayload = buildJsonPayload("SET_PAPER_FIELDS " + paperId + " " + tempFieldsCsv_);
+                        if (auto setResp = sendRequest(setPayload))
+                        {
+                            printResponse(*setResp);
+                        }
+                        else
+                        {
+                            std::cout << "设置论文领域失败（网络/服务器错误）\n";
+                        }
+                    }
+                    else
+                    {
+                        std::cout << "无法从 SUBMIT 响应解析 paperId，跳过设置领域\n";
+                    }
+                }
             }
             else
             {
@@ -509,16 +707,19 @@ bool Cli::handleAuthorMenuInput(const std::string& line)
             if (t == "c" || t == "C")
             {
                 authorWizard_ = AuthorWizard::SubmitAskTitle;
+                tempFieldsCsv_.clear();
                 std::cout << "提交新论文，输入标题（不要含空格）: ";
                 return true;
             }
             if (t == "m" || t == "M")
             {
                 authorWizard_ = AuthorWizard::None;
+                tempFieldsCsv_.clear();
                 printAuthorNumericMenu();
                 return true;
             }
             authorWizard_ = AuthorWizard::None;
+            tempFieldsCsv_.clear();
             return true;
         case AuthorWizard::PostViewPrompt:
             if (t == "c" || t == "C")
@@ -788,19 +989,151 @@ bool Cli::handleAdminMenuInput(const std::string& line)
         case AdminWizard::AddReviewerAskPassword:
         {
             tempPassword_ = t.empty() ? "123456" : t;
-            auto payload = buildJsonPayload("MANAGE_USERS ADD " + tempUsername_ + " " + tempPassword_ + " Reviewer");
-            if (auto resp = sendRequest(payload))
+            tempFields_.clear();
+
+            std::cout << "选择审稿人研究领域（可多选）：\n";
+            for (const auto& opt : fieldOptions())
             {
-                printResponse(*resp);
+                std::cout << "  " << opt.id << ") " << opt.code << " - " << opt.label << "\n";
             }
-            else
-            {
-                std::cout << "发送失败\n";
-            }
-            std::cout << "输入 c 继续添加 Reviewer，m 返回管理员菜单，其他退出向导: ";
-            adminWizard_ = AdminWizard::PostAddPrompt;
+            std::cout << "输入编号或代码（可用空格/逗号分隔多选），直接回车表示不确定方向，输入 done 结束选择: ";
+            adminWizard_ = AdminWizard::AddReviewerAskFields;
             return true;
         }
+
+        case AdminWizard::AddReviewerAskFields:
+        {
+            if (t.empty())
+            {
+                // Finish selection
+                std::vector<std::string> ordered;
+                for (const auto& opt : fieldOptions())
+                {
+                    if (tempFields_.count(opt.code)) ordered.push_back(opt.code);
+                }
+                const std::string fieldsCsv = ordered.empty() ? "NONE" : joinCsv(ordered);
+
+                auto payload = buildJsonPayload("MANAGE_USERS ADD " + tempUsername_ + " " + tempPassword_ + " Reviewer");
+                bool addOk = false;
+                if (auto resp = sendRequest(payload))
+                {
+                    printResponse(*resp);
+                    addOk = resp->payload.value("ok", false);
+                }
+                else
+                {
+                    std::cout << "发送失败\n";
+                }
+
+                if (addOk)
+                {
+                    auto p2 = buildJsonPayload("MANAGE_USERS UPDATE_FIELDS " + tempUsername_ + " " + fieldsCsv);
+                    if (auto r2 = sendRequest(p2))
+                    {
+                        printResponse(*r2);
+                    }
+                    else
+                    {
+                        std::cout << "字段更新发送失败\n";
+                    }
+                }
+
+                std::cout << "输入 c 继续添加 Reviewer，m 返回管理员菜单，其他退出向导: ";
+                adminWizard_ = AdminWizard::PostAddPrompt;
+                return true;
+            }
+
+            const std::string upper = toUpperCopy(t);
+            if (upper == "DONE" || upper == "D")
+            {
+                // Same as empty: finish with current selection
+                std::vector<std::string> ordered;
+                for (const auto& opt : fieldOptions())
+                {
+                    if (tempFields_.count(opt.code)) ordered.push_back(opt.code);
+                }
+                const std::string fieldsCsv = ordered.empty() ? "NONE" : joinCsv(ordered);
+
+                auto payload = buildJsonPayload("MANAGE_USERS ADD " + tempUsername_ + " " + tempPassword_ + " Reviewer");
+                bool addOk = false;
+                if (auto resp = sendRequest(payload))
+                {
+                    printResponse(*resp);
+                    addOk = resp->payload.value("ok", false);
+                }
+                else
+                {
+                    std::cout << "发送失败\n";
+                }
+                if (addOk)
+                {
+                    auto p2 = buildJsonPayload("MANAGE_USERS UPDATE_FIELDS " + tempUsername_ + " " + fieldsCsv);
+                    if (auto r2 = sendRequest(p2))
+                    {
+                        printResponse(*r2);
+                    }
+                    else
+                    {
+                        std::cout << "字段更新发送失败\n";
+                    }
+                }
+
+                std::cout << "输入 c 继续添加 Reviewer，m 返回管理员菜单，其他退出向导: ";
+                adminWizard_ = AdminWizard::PostAddPrompt;
+                return true;
+            }
+
+            for (const auto& tokRaw : splitTokens(t))
+            {
+                const std::string tok = toUpperCopy(tokRaw);
+
+                bool mapped = false;
+                try
+                {
+                    const int id = std::stoi(tok);
+                    for (const auto& opt : fieldOptions())
+                    {
+                        if (opt.id == id)
+                        {
+                            tempFields_.insert(opt.code);
+                            mapped = true;
+                            break;
+                        }
+                    }
+                }
+                catch (...)
+                {
+                }
+
+                if (!mapped)
+                {
+                    for (const auto& opt : fieldOptions())
+                    {
+                        if (tok == opt.code)
+                        {
+                            tempFields_.insert(opt.code);
+                            mapped = true;
+                            break;
+                        }
+                    }
+                }
+
+                if (!mapped)
+                {
+                    std::cout << "未知领域选项: " << tokRaw << "（忽略）\n";
+                }
+            }
+
+            std::vector<std::string> ordered;
+            for (const auto& opt : fieldOptions())
+            {
+                if (tempFields_.count(opt.code)) ordered.push_back(opt.code);
+            }
+            std::cout << "当前选择: " << (ordered.empty() ? "(none)" : joinCsv(ordered)) << "\n";
+            std::cout << "继续选择领域（或输入 done 结束，直接回车表示结束并使用当前选择）: ";
+            return true;
+        }
+
         case AdminWizard::RemoveUserAskName:
         {
             auto payload = buildJsonPayload("MANAGE_USERS REMOVE " + t);
@@ -824,6 +1157,20 @@ bool Cli::handleAdminMenuInput(const std::string& line)
         case AdminWizard::UpdateRoleAskRole:
         {
             tempRole_ = t;
+            const std::string roleUpper = toUpperCopy(tempRole_);
+            if (roleUpper == "REVIEWER")
+            {
+                tempFields_.clear();
+                std::cout << "该用户将被设置为 Reviewer。请选择研究领域（可多选）：\n";
+                for (const auto& opt : fieldOptions())
+                {
+                    std::cout << "  " << opt.id << ") " << opt.code << " - " << opt.label << "\n";
+                }
+                std::cout << "输入编号或代码（可用空格/逗号分隔多选），直接回车表示不确定方向，输入 done 结束选择: ";
+                adminWizard_ = AdminWizard::UpdateRoleAskFields;
+                return true;
+            }
+
             auto payload = buildJsonPayload("MANAGE_USERS UPDATE_ROLE " + tempUsername_ + " " + tempRole_);
             if (auto resp = sendRequest(payload))
             {
@@ -837,6 +1184,99 @@ bool Cli::handleAdminMenuInput(const std::string& line)
             adminWizard_ = AdminWizard::PostUpdatePrompt;
             return true;
         }
+
+        case AdminWizard::UpdateRoleAskFields:
+        {
+            if (t.empty() || toUpperCopy(t) == "DONE" || toUpperCopy(t) == "D")
+            {
+                std::vector<std::string> ordered;
+                for (const auto& opt : fieldOptions())
+                {
+                    if (tempFields_.count(opt.code)) ordered.push_back(opt.code);
+                }
+                const std::string fieldsCsv = ordered.empty() ? "NONE" : joinCsv(ordered);
+
+                auto payload = buildJsonPayload("MANAGE_USERS UPDATE_ROLE " + tempUsername_ + " Reviewer");
+                bool ok = false;
+                if (auto resp = sendRequest(payload))
+                {
+                    printResponse(*resp);
+                    ok = resp->payload.value("ok", false);
+                }
+                else
+                {
+                    std::cout << "发送失败\n";
+                }
+
+                if (ok)
+                {
+                    auto p2 = buildJsonPayload("MANAGE_USERS UPDATE_FIELDS " + tempUsername_ + " " + fieldsCsv);
+                    if (auto r2 = sendRequest(p2))
+                    {
+                        printResponse(*r2);
+                    }
+                    else
+                    {
+                        std::cout << "字段更新发送失败\n";
+                    }
+                }
+
+                std::cout << "输入 c 继续更新角色，m 返回管理员菜单，其他退出向导: ";
+                adminWizard_ = AdminWizard::PostUpdatePrompt;
+                return true;
+            }
+
+            for (const auto& tokRaw : splitTokens(t))
+            {
+                const std::string tok = toUpperCopy(tokRaw);
+
+                bool mapped = false;
+                try
+                {
+                    const int id = std::stoi(tok);
+                    for (const auto& opt : fieldOptions())
+                    {
+                        if (opt.id == id)
+                        {
+                            tempFields_.insert(opt.code);
+                            mapped = true;
+                            break;
+                        }
+                    }
+                }
+                catch (...)
+                {
+                }
+
+                if (!mapped)
+                {
+                    for (const auto& opt : fieldOptions())
+                    {
+                        if (tok == opt.code)
+                        {
+                            tempFields_.insert(opt.code);
+                            mapped = true;
+                            break;
+                        }
+                    }
+                }
+
+                if (!mapped)
+                {
+                    std::cout << "未知领域选项: " << tokRaw << "（忽略）\n";
+                }
+            }
+
+            std::vector<std::string> ordered;
+            for (const auto& opt : fieldOptions())
+            {
+                if (tempFields_.count(opt.code)) ordered.push_back(opt.code);
+            }
+            std::cout << "当前选择: " << (ordered.empty() ? "(none)" : joinCsv(ordered)) << "\n";
+            std::cout << "继续选择领域（或输入 done 结束，直接回车表示结束并使用当前选择）: ";
+            return true;
+        }
+
         case AdminWizard::ResetPwdAskName:
             tempUsername_ = t;
             std::cout << "输入新密码: ";
@@ -1077,9 +1517,123 @@ bool Cli::handleEditorMenuInput(const std::string& line)
         {
         case EditorWizard::AssignAskPaperId:
             tempPaperId_ = t;
-            std::cout << "输入 reviewer 用户名: ";
-            editorWizard_ = EditorWizard::AssignAskReviewer;
+            if (tempPaperId_.empty())
+            {
+                std::cout << "paper_id 不能为空。重新输入 paper_id: ";
+                return true;
+            }
+
+            // Auto recommend top reviewers for this paper.
+            {
+                auto recPayload = buildJsonPayload("RECOMMEND_REVIEWERS " + tempPaperId_ + " 5");
+                auto recResp = sendRequest(recPayload);
+                if (recResp)
+                {
+                    // Print compact recommendation list (don’t dump full JSON here).
+                    if (recResp->payload.value("ok", false))
+                    {
+                        const auto& data = recResp->payload.value("data", osp::protocol::json::object());
+                        const auto candidates = data.value("candidates", osp::protocol::json::array());
+                        std::cout << "推荐审稿人（Top " << candidates.size() << "）：\n";
+                        for (std::size_t i = 0; i < candidates.size(); ++i)
+                        {
+                            const auto& c = candidates[i];
+                            const std::string username = c.value("username", "");
+                            const std::size_t score = c.value("score", 0);
+                            std::string matched;
+                            if (c.contains("matchedFields") && c["matchedFields"].is_array())
+                            {
+                                for (std::size_t j = 0; j < c["matchedFields"].size(); ++j)
+                                {
+                                    if (j) matched += ",";
+                                    matched += c["matchedFields"][j].get<std::string>();
+                                }
+                            }
+                            std::cout << "  " << (i + 1) << ") " << username << "  重合度=" << score;
+                            if (!matched.empty()) std::cout << "  重合领域=" << matched;
+                            std::cout << "\n";
+                        }
+                    }
+                    else
+                    {
+                        std::cout << "（推荐列表获取失败：" << recResp->payload.value("error", "UNKNOWN") << "）\n";
+                    }
+                }
+                else
+                {
+                    std::cout << "（推荐列表获取失败：发送失败）\n";
+                }
+            }
+
+            std::cout << "输入 1-5 使用推荐快速指派；输入 n 手动输入 reviewer 用户名: ";
+            editorWizard_ = EditorWizard::AssignPickRecommended;
             return true;
+
+        case EditorWizard::AssignPickRecommended:
+        {
+            const std::string upper = toUpperCopy(t);
+            if (upper == "N")
+            {
+                std::cout << "输入 reviewer 用户名: ";
+                editorWizard_ = EditorWizard::AssignAskReviewer;
+                return true;
+            }
+
+            // Try numeric quick assign
+            std::size_t idx = 0;
+            try
+            {
+                idx = static_cast<std::size_t>(std::stoul(t));
+            }
+            catch (...)
+            {
+                idx = 0;
+            }
+            if (idx == 0 || idx > 5)
+            {
+                std::cout << "无效输入。输入 1-5 快速指派；输入 n 手动输入 reviewer 用户名: ";
+                return true;
+            }
+
+            // Fetch recommendation again to map index->username.
+            auto recPayload = buildJsonPayload("RECOMMEND_REVIEWERS " + tempPaperId_ + " 5");
+            auto recResp = sendRequest(recPayload);
+            if (!recResp || !recResp->payload.value("ok", false))
+            {
+                std::cout << "推荐列表不可用，改为手动输入 reviewer 用户名: ";
+                editorWizard_ = EditorWizard::AssignAskReviewer;
+                return true;
+            }
+            const auto& data = recResp->payload.value("data", osp::protocol::json::object());
+            const auto candidates = data.value("candidates", osp::protocol::json::array());
+            if (!candidates.is_array() || candidates.size() < idx)
+            {
+                std::cout << "推荐列表为空/不足，改为手动输入 reviewer 用户名: ";
+                editorWizard_ = EditorWizard::AssignAskReviewer;
+                return true;
+            }
+            const std::string username = candidates[idx - 1].value("username", "");
+            if (username.empty())
+            {
+                std::cout << "推荐用户名无效，改为手动输入 reviewer 用户名: ";
+                editorWizard_ = EditorWizard::AssignAskReviewer;
+                return true;
+            }
+
+            auto payload = buildJsonPayload("ASSIGN " + tempPaperId_ + " " + username);
+            if (auto resp = sendRequest(payload))
+            {
+                printResponse(*resp);
+            }
+            else
+            {
+                std::cout << "发送失败\n";
+            }
+            std::cout << "输入 c 继续指派，m 返回编辑菜单，其他退出向导: ";
+            editorWizard_ = EditorWizard::PostAssignPrompt;
+            return true;
+        }
+
         case EditorWizard::AssignAskReviewer:
         {
             auto payload = buildJsonPayload("ASSIGN " + tempPaperId_ + " " + t);
