@@ -407,9 +407,8 @@
 			const quickItems = [
 				{ cmd: 'LIST_PAPERS' },
 				{ cmd: 'ASSIGN [PAPER_ID] [REVIEWER]' },
-				{ cmd: 'REQUEST_REVISION [PAPER_ID]' },
-				{ cmd: 'FINAL_DECISION [PAPER_ID] ACCEPT' },
-				{ cmd: 'FINAL_DECISION [PAPER_ID] REJECT' },
+				{ cmd: 'MAKE_FINAL_DECISION [PAPER_ID] ACCEPT' },
+				{ cmd: 'MAKE_FINAL_DECISION [PAPER_ID] REJECT' },
 			];
 
 			const renderQuick = () => {

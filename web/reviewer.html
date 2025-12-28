@@ -501,9 +501,8 @@
 			const quickItems = [
 				{ cmd: 'LIST_PAPERS' },
 				{ cmd: 'GET_PAPER [ID]' },
-				{ cmd: 'SUBMIT_REVIEW [ID] ACCEPT "Concise justification"' },
-				{ cmd: 'SUBMIT_REVIEW [ID] REJECT "Missing experiments"' },
-				{ cmd: 'REQUEST_REVISION [ID] "Need stronger baselines"' },
+				{ cmd: 'REVIEW [ID] ACCEPT "Concise justification"' },
+				{ cmd: 'REVIEW [ID] REJECT "Missing experiments"' },
 			];
 
 			const renderQuick = () => {
