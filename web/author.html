@@ -123,6 +123,38 @@
       input:focus { border-color: var(--border-strong); box-shadow: 0 0 0 1px var(--border-strong), 0 14px 30px rgba(168,85,247,0.18); outline: none; }
       input::placeholder { color: rgba(148, 163, 184, 0.6); }
 
+      textarea {
+        width: 100%;
+        background: rgba(0, 0, 0, 0.45);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-md);
+        padding: 12px 14px;
+        color: var(--text);
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 14px;
+        min-height: 110px;
+        resize: vertical;
+        transition: border 0.25s var(--ease), box-shadow 0.25s var(--ease);
+      }
+      textarea:focus { border-color: var(--border-strong); box-shadow: 0 0 0 1px var(--border-strong), 0 14px 30px rgba(168,85,247,0.18); outline: none; }
+      textarea::placeholder { color: rgba(148, 163, 184, 0.6); }
+
+      .field-grid { display: flex; flex-wrap: wrap; gap: 10px; }
+      .field-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 10px 12px;
+        border-radius: 999px;
+        border: 1px solid var(--border);
+        background: rgba(255,255,255,0.03);
+        cursor: pointer;
+        user-select: none;
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 12px;
+      }
+      .field-chip input { width: auto; padding: 0; margin: 0; accent-color: var(--primary); }
+
       button {
         border: 1px solid var(--border);
         background: linear-gradient(140deg, rgba(255,255,255,0.05), rgba(255,255,255,0.02));
@@ -238,6 +270,26 @@
             <input id="session" placeholder="Paste session token" />
           </div>
           <button id="logout" class="danger"><i class="fas fa-power-off"></i> Logout</button>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-header"><i class="fas fa-file-upload"></i> Guided Submit</div>
+        <div class="row">
+          <div class="input-with-icon">
+            <i class="fas fa-heading"></i>
+            <input id="paper-title" placeholder="Title (no spaces)" />
+          </div>
+        </div>
+        <div class="row">
+          <textarea id="paper-content" placeholder="Paper content (can include spaces)"></textarea>
+        </div>
+        <div class="row" style="flex-direction: column; gap: 10px;">
+          <div style="color: var(--muted); font-size: 12px; letter-spacing: 0.08em;">FIELDS (optional, multi-select)</div>
+          <div class="field-grid" id="field-grid"></div>
+        </div>
+        <div class="row">
+          <button id="guided-submit" class="primary"><i class="fas fa-paper-plane"></i> Submit Paper</button>
         </div>
       </div>
 
@@ -403,8 +455,9 @@
 
       const quickItems = [
         { cmd: 'LIST_PAPERS' },
-        { cmd: 'SUBMIT "My Paper" "Abstract"' },
+        { cmd: 'SUBMIT MyTitle My content with spaces' },
         { cmd: 'GET_PAPER [ID]' },
+        { cmd: 'SET_PAPER_FIELDS [ID] OS,NET' },
         { cmd: 'REVISE [ID] "New content"' },
         { cmd: 'DELETE_PAPER [ID]' },
       ];
@@ -454,8 +507,66 @@
         }
         setSession(savedSession);
         setUser(localStorage.getItem('username') || 'Author');
+
+        // Render field chips
+        const fieldOptions = [
+          { id: 1, code: 'OS', label: 'Operating Systems' },
+          { id: 2, code: 'NET', label: 'Networks' },
+          { id: 3, code: 'DB', label: 'Databases' },
+          { id: 4, code: 'SEC', label: 'Security' },
+          { id: 5, code: 'AI', label: 'Artificial Intelligence' },
+          { id: 6, code: 'ML', label: 'Machine Learning' },
+        ];
+        const grid = document.getElementById('field-grid');
+        if (grid) {
+          grid.innerHTML = '';
+          fieldOptions.forEach((opt) => {
+            const label = document.createElement('label');
+            label.className = 'field-chip';
+            label.innerHTML = `<input type="checkbox" value="${opt.code}" /> <span>${opt.code}</span> <span style="color: var(--muted);">${opt.label}</span>`;
+            grid.appendChild(label);
+          });
+        }
+
         setTimeout(() => notify('Author console ready', 'success'), 500);
       });
+
+      const getSelectedFieldsCsv = () => {
+        const grid = document.getElementById('field-grid');
+        if (!grid) return '';
+        const checked = Array.from(grid.querySelectorAll('input[type="checkbox"]')).filter((c) => c.checked);
+        const codes = checked.map((c) => String(c.value || '').trim()).filter(Boolean);
+        return codes.join(',');
+      };
+
+      const guidedSubmit = async () => {
+        const sessionId = $('#session').value.trim();
+        if (!sessionId) { setOutput('Session required for submit', 'error'); notify('Provide session token', 'error'); return; }
+
+        const title = ($('#paper-title').value || '').trim();
+        const content = ($('#paper-content').value || '').trim();
+        if (!title) { setOutput('Title required', 'error'); notify('Missing title', 'error'); return; }
+        if (/\s/.test(title)) { setOutput('Title cannot contain spaces', 'error'); notify('Title must be a single token', 'error'); return; }
+        if (!content) { setOutput('Content required', 'error'); notify('Missing content', 'error'); return; }
+
+        const fieldsCsv = getSelectedFieldsCsv();
+        setOutput(`Submitting paper: ${title}`, 'info');
+        const r = await api('/api/command', { command: `SUBMIT ${title} ${content}`, sessionId });
+        if (!r.ok) { setOutput(`SUBMIT failed: ${JSON.stringify(r, null, 2)}`, 'error'); notify('Submit failed', 'error'); return; }
+        setOutput(`SUBMIT ok: ${JSON.stringify(r.data || {}, null, 2)}`, 'success');
+
+        const paperId = r.data && (r.data.paperId !== undefined ? String(r.data.paperId) : '');
+        if (paperId && fieldsCsv) {
+          setOutput(`Setting fields for paper ${paperId}: ${fieldsCsv}`, 'info');
+          const r2 = await api('/api/command', { command: `SET_PAPER_FIELDS ${paperId} ${fieldsCsv}`, sessionId });
+          if (r2.ok) { setOutput(`SET_PAPER_FIELDS ok: ${JSON.stringify(r2.data || {}, null, 2)}`, 'success'); notify('Submitted with fields', 'success'); }
+          else { setOutput(`SET_PAPER_FIELDS failed: ${JSON.stringify(r2, null, 2)}`, 'error'); notify('Fields set failed', 'warning'); }
+        } else {
+          notify('Submitted (no fields)', 'success');
+        }
+      };
+
+      document.getElementById('guided-submit').addEventListener('click', guidedSubmit);
     </script>
   </body>
 </html>

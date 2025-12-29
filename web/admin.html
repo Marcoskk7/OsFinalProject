@@ -257,13 +257,32 @@
         box-sizing: border-box; /* Fix sizing */
       }
 
-      input:focus {
+      select {
+        width: 100%;
+        background: rgba(0, 0, 0, 0.3);
+        border: 1px solid var(--glass-border);
+        color: white;
+        padding: 14px 16px 14px 44px;
+        border-radius: var(--radius-md);
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 14px;
+        outline: none;
+        transition: all 0.3s ease;
+        box-sizing: border-box;
+        appearance: none;
+        -webkit-appearance: none;
+      }
+
+      input:focus,
+      select:focus {
         background: rgba(0, 0, 0, 0.5);
         border-color: var(--primary);
         box-shadow: 0 0 0 1px var(--primary), 0 0 20px rgba(99, 102, 241, 0.1);
       }
       
-      input:focus + i, .input-with-icon:focus-within i {
+      input:focus + i,
+      select:focus + i,
+      .input-with-icon:focus-within i {
         color: var(--primary);
       }
 
@@ -274,6 +293,33 @@
       input:disabled {
         opacity: 0.5;
         cursor: not-allowed;
+      }
+
+      .field-grid {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+      }
+
+      .field-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 10px 12px;
+        border-radius: 999px;
+        border: 1px solid var(--glass-border);
+        background: rgba(255, 255, 255, 0.03);
+        cursor: pointer;
+        user-select: none;
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 12px;
+      }
+
+      .field-chip input {
+        width: auto;
+        padding: 0;
+        margin: 0;
+        accent-color: var(--primary);
       }
 
       /* --- Buttons --- */
@@ -634,6 +680,60 @@
       <div class="section">
         <div class="section-header">
           <div class="label">
+            <i class="fas fa-user-check"></i>
+            User Creation
+          </div>
+        </div>
+
+        <div class="row">
+          <div class="input-with-icon">
+            <i class="fas fa-user"></i>
+            <input id="add-reviewer-username" placeholder="New reviewer username" />
+          </div>
+          <div class="input-with-icon">
+            <i class="fas fa-lock"></i>
+            <input id="add-reviewer-password" placeholder="Password (default 123456)" />
+          </div>
+		  <div class="input-with-icon">
+			<i class="fas fa-user-tag"></i>
+			<select id="add-user-role">
+				<option value="Reviewer" selected>Reviewer</option>
+				<option value="Author">Author</option>
+				<option value="Editor">Editor</option>
+				<option value="Admin">Admin</option>
+			</select>
+		  </div>
+        </div>
+
+        <div id="add-user-fields-block" class="row" style="flex-direction: column; gap: 10px;">
+          <div class="label" style="opacity: 0.8;"><i class="fas fa-tags"></i> Fields (Reviewer only, optional)</div>
+          <div id="reviewer-field-grid-add" class="field-grid"></div>
+        </div>
+
+        <div class="row">
+          <button id="add-reviewer-guided" class="success"><i class="fas fa-user-plus"></i> Add User</button>
+        </div>
+
+        <div class="row" style="margin-top: 16px;">
+          <div class="input-with-icon">
+            <i class="fas fa-user-pen"></i>
+            <input id="update-reviewer-username" placeholder="Existing reviewer username" />
+          </div>
+        </div>
+
+        <div class="row" style="flex-direction: column; gap: 10px;">
+          <div class="label" style="opacity: 0.8;"><i class="fas fa-tags"></i> Fields (optional)</div>
+          <div id="reviewer-field-grid-update" class="field-grid"></div>
+        </div>
+
+        <div class="row">
+          <button id="update-reviewer-fields" class="secondary"><i class="fas fa-pen-to-square"></i> Update Fields</button>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-header">
+          <div class="label">
             <i class="fas fa-terminal"></i>
             Command Line Interface
           </div>
@@ -929,6 +1029,10 @@
         { cmd: 'VIEW_SYSTEM_STATUS' },
         { cmd: 'LIST_PAPERS' },
         { cmd: 'MANAGE_USERS LIST' },
+        { cmd: 'MANAGE_USERS REMOVE [USERNAME]' },
+        { cmd: 'MANAGE_USERS UPDATE_ROLE [USERNAME] [ROLE]' },
+        { cmd: 'MANAGE_USERS RESET_PASSWORD [USERNAME] [NEW_PASSWORD]' },
+        { cmd: 'MANAGE_USERS UPDATE_FIELDS [USERNAME] [FIELDS_CSV|NONE]' },
         { cmd: 'BACKUP /tmp/backup' },
       ];
 
@@ -999,6 +1103,85 @@
 
         $('#command').focus();
         setTimeout(() => { showNotification(`${roleLabel} node initialized`, 'success'); }, 600);
+
+        const fieldOptions = [
+          { id: 1, code: 'OS', label: 'Operating Systems' },
+          { id: 2, code: 'NET', label: 'Networks' },
+          { id: 3, code: 'DB', label: 'Databases' },
+          { id: 4, code: 'SEC', label: 'Security' },
+          { id: 5, code: 'AI', label: 'Artificial Intelligence' },
+          { id: 6, code: 'ML', label: 'Machine Learning' },
+        ];
+
+        const renderFieldGrid = (gridId) => {
+          const grid = document.getElementById(gridId);
+          if (!grid) return;
+          grid.innerHTML = '';
+          fieldOptions.forEach((opt) => {
+            const label = document.createElement('label');
+            label.className = 'field-chip';
+            label.innerHTML = `<input type="checkbox" value="${opt.code}" /> <span>${opt.code}</span> <span style="color: var(--text-muted);">${opt.label}</span>`;
+            grid.appendChild(label);
+          });
+        };
+
+        const getFieldsCsv = (gridId) => {
+          const grid = document.getElementById(gridId);
+          if (!grid) return '';
+          const checked = Array.from(grid.querySelectorAll('input[type="checkbox"]')).filter((c) => c.checked);
+          return checked.map((c) => String(c.value || '').trim()).filter(Boolean).join(',');
+        };
+
+        renderFieldGrid('reviewer-field-grid-add');
+        renderFieldGrid('reviewer-field-grid-update');
+
+		const syncAddUserRoleUi = () => {
+			const role = (document.getElementById('add-user-role')?.value || 'Reviewer').trim();
+			const block = document.getElementById('add-user-fields-block');
+			if (!block) return;
+			block.style.display = (role === 'Reviewer') ? 'flex' : 'none';
+		};
+		document.getElementById('add-user-role')?.addEventListener('change', syncAddUserRoleUi);
+		syncAddUserRoleUi();
+
+        document.getElementById('add-reviewer-guided')?.addEventListener('click', async () => {
+          const sessionId = $('#session').value.trim();
+          if (!sessionId) { setOutput('Session required', 'error'); showNotification('Login required', 'error'); return; }
+          const username = ($('#add-reviewer-username').value || '').trim();
+          const password = ($('#add-reviewer-password').value || '').trim() || '123456';
+          if (!username) { setOutput('Username required', 'error'); showNotification('Missing username', 'error'); return; }
+          const role = (document.getElementById('add-user-role')?.value || 'Reviewer').trim();
+          const fieldsCsv = getFieldsCsv('reviewer-field-grid-add') || 'NONE';
+
+          setOutput(`Adding user ${username} as ${role}...`, 'info');
+          const r = await api('/api/command', { command: `MANAGE_USERS ADD ${username} ${password} ${role}`, sessionId });
+          if (!r.ok) { setOutput(`ADD failed: ${JSON.stringify(r, null, 2)}`, 'error'); showNotification('Add failed', 'error'); return; }
+          setOutput(`ADD ok: ${JSON.stringify(r.data || {}, null, 2)}`, 'success');
+
+		  if (role === 'Reviewer')
+		  {
+			setOutput(`Setting fields: ${fieldsCsv}`, 'info');
+			const r2 = await api('/api/command', { command: `MANAGE_USERS UPDATE_FIELDS ${username} ${fieldsCsv}`, sessionId });
+			if (r2.ok) { setOutput(`UPDATE_FIELDS ok: ${JSON.stringify(r2.data || {}, null, 2)}`, 'success'); showNotification('User created', 'success'); }
+			else { setOutput(`UPDATE_FIELDS failed: ${JSON.stringify(r2, null, 2)}`, 'error'); showNotification('Fields update failed', 'warning'); }
+			return;
+		  }
+
+		  showNotification('User created', 'success');
+        });
+
+        document.getElementById('update-reviewer-fields')?.addEventListener('click', async () => {
+          const sessionId = $('#session').value.trim();
+          if (!sessionId) { setOutput('Session required', 'error'); showNotification('Login required', 'error'); return; }
+          const username = ($('#update-reviewer-username').value || '').trim();
+          if (!username) { setOutput('Username required', 'error'); showNotification('Missing username', 'error'); return; }
+          if (username.toLowerCase() === 'admin') { setOutput('Cannot modify Admin user', 'error'); showNotification('Admin is protected', 'warning'); return; }
+          const fieldsCsv = getFieldsCsv('reviewer-field-grid-update') || 'NONE';
+          setOutput(`Updating fields for ${username}: ${fieldsCsv}`, 'info');
+          const r = await api('/api/command', { command: `MANAGE_USERS UPDATE_FIELDS ${username} ${fieldsCsv}`, sessionId });
+          if (r.ok) { setOutput(`UPDATE_FIELDS ok: ${JSON.stringify(r.data || {}, null, 2)}`, 'success'); showNotification('Fields updated', 'success'); }
+          else { setOutput(`UPDATE_FIELDS failed: ${JSON.stringify(r, null, 2)}`, 'error'); showNotification('Update failed', 'error'); }
+        });
       });
     </script>
   </body>

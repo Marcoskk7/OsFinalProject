@@ -300,7 +300,7 @@ osp::protocol::Message ServerApp::handleCommand(const osp::protocol::Command&   
     // 论文相关命令
     if (cmd.name == "LIST_PAPERS" || cmd.name == "SUBMIT" || cmd.name == "GET_PAPER"
         || cmd.name == "ASSIGN" || cmd.name == "REVIEW" || cmd.name == "LIST_REVIEWS"
-        || cmd.name == "DECISION" || cmd.name == "REVISE" || cmd.name == "SET_PAPER_FIELDS" || cmd.name == "DELETE_PAPER")
+        || cmd.name == "DECISION" || cmd.name == "REVISE" || cmd.name == "SET_PAPER_FIELDS")
     {
         return handlePaperCommand(cmd, maybeSession);
     }
@@ -523,15 +523,36 @@ osp::protocol::Message ServerApp::handleCommand(const osp::protocol::Command&   
                 return osp::protocol::makeErrorResponse("MISSING_ARGS", "MANAGE_USERS REMOVE: missing username");
             }
             const std::string& username = cmd.args[1];
-            std::lock_guard<std::mutex> lock(authMutex_);
-            if (auth_.removeUser(username))
+
+            std::optional<osp::Role> targetRole;
+            std::optional<osp::UserId> targetUserId;
             {
-                return osp::protocol::makeSuccessResponse({{"message", "User removed"}, {"username", username}});
+                std::lock_guard<std::mutex> lock(authMutex_);
+                targetRole = auth_.getUserRole(username);
+                targetUserId = auth_.getUserId(username);
+                if (!targetRole)
+                {
+                    return osp::protocol::makeErrorResponse("NOT_FOUND", "MANAGE_USERS REMOVE failed: user not found");
+                }
+                if (*targetRole == osp::Role::Admin)
+                {
+                    return osp::protocol::makeErrorResponse("PERMISSION_DENIED", "MANAGE_USERS REMOVE: cannot remove Admin user");
+                }
+                if (!auth_.removeUser(username))
+                {
+                    return osp::protocol::makeErrorResponse("NOT_FOUND", "MANAGE_USERS REMOVE failed: user not found");
+                }
             }
-            else
+
+            // Best-effort cleanup: remove reviewer_fields mapping if it exists.
+            if (targetUserId)
             {
-                return osp::protocol::makeErrorResponse("NOT_FOUND", "MANAGE_USERS REMOVE failed: user not found");
+                std::lock_guard<std::mutex> lock(vfsMutex_);
+                const std::string fieldsPath = "/system/reviewer_fields/" + std::to_string(*targetUserId) + ".txt";
+                vfs_.removeFile(fieldsPath);
             }
+
+            return osp::protocol::makeSuccessResponse({{"message", "User removed"}, {"username", username}});
         }
         else if (subcmd == "UPDATE_ROLE")
         {
@@ -544,14 +565,21 @@ osp::protocol::Message ServerApp::handleCommand(const osp::protocol::Command&   
 
             osp::Role role = stringToRole(roleStr);
             std::lock_guard<std::mutex> lock(authMutex_);
+            auto targetRole = auth_.getUserRole(username);
+            if (!targetRole)
+            {
+                return osp::protocol::makeErrorResponse("NOT_FOUND", "MANAGE_USERS UPDATE_ROLE failed: user not found");
+            }
+            if (*targetRole == osp::Role::Admin)
+            {
+                return osp::protocol::makeErrorResponse("PERMISSION_DENIED", "MANAGE_USERS UPDATE_ROLE: cannot modify Admin user");
+            }
+
             if (auth_.updateUserRole(username, role))
             {
                 return osp::protocol::makeSuccessResponse({{"message", "Role updated"}, {"username", username}, {"role", roleStr}});
             }
-            else
-            {
-                return osp::protocol::makeErrorResponse("NOT_FOUND", "MANAGE_USERS UPDATE_ROLE failed: user not found");
-            }
+            return osp::protocol::makeErrorResponse("NOT_FOUND", "MANAGE_USERS UPDATE_ROLE failed: user not found");
         }
         else if (subcmd == "RESET_PASSWORD")
         {
@@ -563,14 +591,22 @@ osp::protocol::Message ServerApp::handleCommand(const osp::protocol::Command&   
             const std::string& newPassword = cmd.args[2];
 
             std::lock_guard<std::mutex> lock(authMutex_);
+            auto targetRole = auth_.getUserRole(username);
+            if (!targetRole)
+            {
+                return osp::protocol::makeErrorResponse("NOT_FOUND", "MANAGE_USERS RESET_PASSWORD failed: user not found");
+            }
+            if (*targetRole == osp::Role::Admin)
+            {
+                return osp::protocol::makeErrorResponse("PERMISSION_DENIED", "MANAGE_USERS RESET_PASSWORD: cannot modify Admin user");
+            }
+
             if (auth_.resetUserPassword(username, newPassword))
             {
                 return osp::protocol::makeSuccessResponse({{"message", "Password reset"}, {"username", username}});
             }
-            else
-            {
-                return osp::protocol::makeErrorResponse("NOT_FOUND", "MANAGE_USERS RESET_PASSWORD failed: user not found");
-            }
+
+            return osp::protocol::makeErrorResponse("NOT_FOUND", "MANAGE_USERS RESET_PASSWORD failed: user not found");
         }
         else if (subcmd == "UPDATE_FIELDS")
         {
@@ -580,6 +616,19 @@ osp::protocol::Message ServerApp::handleCommand(const osp::protocol::Command&   
             }
             const std::string& username = cmd.args[1];
             const std::string& fieldsCsv = cmd.args[2];
+
+            {
+                std::lock_guard<std::mutex> lock(authMutex_);
+                auto targetRole = auth_.getUserRole(username);
+                if (!targetRole)
+                {
+                    return osp::protocol::makeErrorResponse("NOT_FOUND", "MANAGE_USERS UPDATE_FIELDS: user not found");
+                }
+                if (*targetRole == osp::Role::Admin)
+                {
+                    return osp::protocol::makeErrorResponse("PERMISSION_DENIED", "MANAGE_USERS UPDATE_FIELDS: cannot modify Admin user");
+                }
+            }
 
             std::optional<osp::UserId> userIdOpt;
             {
@@ -1036,93 +1085,6 @@ ServerApp::handlePaperCommand(const osp::protocol::Command&                     
             {"paperId", pidStr},
             {"fields", fieldsArr}
         });
-    }
-
-    if (cmd.name == "DELETE_PAPER")
-    {
-        if (cmd.args.empty())
-        {
-            return osp::protocol::makeErrorResponse("MISSING_ARGS", "Usage: DELETE_PAPER <PaperID>");
-        }
-
-        const std::string pidStr = cmd.args[0];
-        const std::string paperDir = "/papers/" + pidStr;
-        const std::string metaPath = paperDir + "/meta.txt";
-        const std::string contentPath = paperDir + "/content.txt";
-        const std::string fieldsPath = paperDir + "/fields.txt";
-        const std::string reviewersPath = paperDir + "/reviewers.txt";
-        const std::string reviewsDir = paperDir + "/reviews";
-        const std::string revisionsDir = paperDir + "/revisions";
-
-        // Read meta to check existence and author
-        std::optional<std::string> metaData;
-        {
-            std::lock_guard<std::mutex> lock(vfsMutex_);
-            metaData = vfs_.readFile(metaPath);
-        }
-        if (!metaData)
-        {
-            return osp::protocol::makeErrorResponse("NOT_FOUND", "Paper not found");
-        }
-
-        std::stringstream metaSS(*metaData);
-        std::uint32_t p_id;
-        std::uint32_t p_authorId;
-        metaSS >> p_id >> p_authorId;
-
-        const bool isAdmin = (maybeSession->role == osp::Role::Admin);
-        const bool isAuthor = (maybeSession->role == osp::Role::Author);
-
-        if (!isAdmin && !(isAuthor && p_authorId == maybeSession->userId))
-        {
-            return osp::protocol::makeErrorResponse("PERMISSION_DENIED", "Permission denied: only Admin or the paper author can delete this paper");
-        }
-
-        // Remove files and directories under paperDir
-        {
-            std::lock_guard<std::mutex> lock(vfsMutex_);
-
-            // Remove reviews files
-            if (auto listing = vfs_.listDirectory(reviewsDir))
-            {
-                std::stringstream ss(*listing);
-                std::string entry;
-                while (std::getline(ss, entry))
-                {
-                    if (entry.empty()) continue;
-                    // skip directories (shouldn't be nested normally)
-                    if (entry.back() == '/') continue;
-                    vfs_.removeFile(reviewsDir + "/" + entry);
-                }
-                // attempt to remove reviews dir (may fail if not empty)
-                vfs_.removeDirectory(reviewsDir);
-            }
-
-            // Remove revisions files
-            if (auto listing = vfs_.listDirectory(revisionsDir))
-            {
-                std::stringstream ss(*listing);
-                std::string entry;
-                while (std::getline(ss, entry))
-                {
-                    if (entry.empty()) continue;
-                    if (entry.back() == '/') continue;
-                    vfs_.removeFile(revisionsDir + "/" + entry);
-                }
-                vfs_.removeDirectory(revisionsDir);
-            }
-
-            // Remove top-level files
-            vfs_.removeFile(reviewersPath);
-            vfs_.removeFile(fieldsPath);
-            vfs_.removeFile(contentPath);
-            vfs_.removeFile(metaPath);
-
-            // Finally remove paper directory
-            vfs_.removeDirectory(paperDir);
-        }
-
-        return osp::protocol::makeSuccessResponse({{"message", "Paper deleted"}, {"paperId", pidStr}});
     }
 
     if (cmd.name == "GET_PAPER")

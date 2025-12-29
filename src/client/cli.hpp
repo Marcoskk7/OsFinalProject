@@ -104,9 +104,10 @@ private:
     enum class AdminWizard
     {
         None,
-        AddReviewerAskName,
-        AddReviewerAskPassword,
-        AddReviewerAskFields,
+        AddUserAskName,
+        AddUserAskPassword,
+        AddUserAskRole,
+        AddUserAskFields,
         RemoveUserAskName,
         UpdateRoleAskName,
         UpdateRoleAskRole,

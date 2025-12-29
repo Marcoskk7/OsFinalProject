@@ -160,10 +160,59 @@
 			.paper-title { margin-top: 8px; font-weight: 700; color: var(--text); line-height: 1.4; }
 			.papers-empty { text-align: center; padding: 16px; border: 1px dashed var(--border); color: var(--muted); }
 
+			.recommendations {
+				margin-top: 12px;
+				display: grid;
+				gap: 10px;
+			}
+			.recommendation {
+				border: 1px solid var(--border);
+				border-radius: var(--radius-md);
+				padding: 12px;
+				background: rgba(255,255,255,0.03);
+				display: flex;
+				justify-content: space-between;
+				align-items: center;
+				gap: 12px;
+			}
+			.recommendation .meta {
+				display: flex;
+				flex-direction: column;
+				gap: 4px;
+			}
+			.recommendation .who {
+				font-weight: 800;
+				letter-spacing: 0.02em;
+			}
+			.recommendation .fields {
+				font-family: 'JetBrains Mono', monospace;
+				font-size: 12px;
+				color: var(--muted);
+			}
+			.recommendation .rank {
+				font-family: 'JetBrains Mono', monospace;
+				font-size: 12px;
+				color: var(--muted);
+			}
+
 			.output-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
 			#output {
 				min-height: 240px;
 				max-height: 400px;
+				overflow-y: auto;
+				background: #080b13;
+				border: 1px solid var(--border);
+				border-radius: var(--radius-md);
+				padding: 18px;
+				font-family: 'JetBrains Mono', monospace;
+				color: var(--text);
+				line-height: 1.6;
+				box-shadow: inset 0 0 20px rgba(0,0,0,0.4);
+			}
+
+			#paper-details-output {
+				min-height: 160px;
+				max-height: 320px;
 				overflow-y: auto;
 				background: #080b13;
 				border: 1px solid var(--border);
@@ -272,6 +321,29 @@
 			</div>
 
 			<div class="section">
+				<div class="section-header"><i class="fas fa-file-lines"></i> Paper Details</div>
+				<div class="row">
+					<div class="input-with-icon">
+						<i class="fas fa-hashtag"></i>
+						<input id="paper-id" placeholder="Enter paper_id" />
+					</div>
+					<button id="view-paper" class="primary"><i class="fas fa-eye"></i> View</button>
+					<button id="clear-paper" class="danger"><i class="fas fa-xmark"></i> Clear</button>
+				</div>
+				<div style="color: var(--muted); font-size: 12px; margin-top: 6px;">Tip: click a paper card above to view details.</div>
+				<pre id="paper-details-output">No paper loaded.</pre>
+			</div>
+
+			<div class="section">
+				<div class="section-header"><i class="fas fa-user-check"></i> Assign Reviewer (Recommended)</div>
+				<div class="row">
+					<button id="load-recommendations" class="primary" style="width: 100%; justify-content: center"><i class="fas fa-wand-magic-sparkles"></i> Load Top 5 Recommendations</button>
+				</div>
+				<div style="color: var(--muted); font-size: 12px; margin-top: 6px;">Uses <span style="font-family: 'JetBrains Mono', monospace;">RECOMMEND_REVIEWERS &lt;paper_id&gt; 5</span> and one-click <span style="font-family: 'JetBrains Mono', monospace;">ASSIGN</span>.</div>
+				<div id="recommendations" class="recommendations"></div>
+			</div>
+
+			<div class="section">
 				<div class="output-header">
 					<div class="section-header" style="margin:0; border:none; padding:0"><i class="fas fa-desktop"></i> System Logs</div>
 					<button class="copy-btn" id="copy-output"><i class="fas fa-copy"></i> Copy Log</button>
@@ -325,6 +397,106 @@
 
 			const setSession = (id) => { const input = $('#session'); input.value = id || ''; };
 			const setUser = (name) => { loggedInUser = name || ''; $('#current-user').textContent = name || 'Guest'; };
+			let lastRecommendations = [];
+
+			const renderRecommendations = (paperId, candidates) => {
+				const host = $('#recommendations');
+				if (!host) return;
+				host.innerHTML = '';
+				const pid = String(paperId || '').trim();
+				if (!Array.isArray(candidates) || candidates.length === 0) {
+					const empty = document.createElement('div');
+					empty.className = 'papers-empty';
+					empty.textContent = 'No recommendations available.';
+					host.appendChild(empty);
+					return;
+				}
+				candidates.forEach((c, idx) => {
+					const username = c?.username ?? '';
+					const score = c?.score ?? 0;
+					const matchedFields = Array.isArray(c?.matchedFields) ? c.matchedFields.join(',') : '';
+
+					const row = document.createElement('div');
+					row.className = 'recommendation';
+					const meta = document.createElement('div');
+					meta.className = 'meta';
+					const who = document.createElement('div');
+					who.className = 'who';
+					who.textContent = username ? username : '(unknown)';
+					const fields = document.createElement('div');
+					fields.className = 'fields';
+					fields.textContent = `Matched: ${matchedFields || '(none)'} | Score: ${score}`;
+					const rank = document.createElement('div');
+					rank.className = 'rank';
+					rank.textContent = `#${idx + 1}`;
+					meta.append(who, fields, rank);
+
+					const btn = document.createElement('button');
+					btn.className = 'success';
+					btn.innerHTML = '<i class="fas fa-user-plus"></i> Assign';
+					btn.disabled = !pid || !username;
+					btn.addEventListener('click', async () => {
+						await assignReviewer(pid, username);
+					});
+
+					row.append(meta, btn);
+					host.appendChild(row);
+				});
+			};
+
+			const loadRecommendations = async () => {
+				const sessionId = $('#session').value.trim();
+				if (!sessionId) {
+					setOutput('Session required for recommendations', 'error');
+					notify('Provide session token', 'error');
+					return;
+				}
+				const pid = $('#paper-id').value.trim();
+				if (!pid) {
+					setOutput('paper_id required for recommendations', 'error');
+					notify('Missing paper_id', 'error');
+					return;
+				}
+				setOutput(`Requesting recommendations for paper ${pid}...`, 'info');
+				const r = await api('/api/command', { command: `RECOMMEND_REVIEWERS ${pid} 5`, sessionId });
+				if (!r.ok) {
+					setOutput(`RECOMMEND_REVIEWERS failed: ${JSON.stringify(r, null, 2)}`, 'error');
+					notify('Recommend failed', 'error');
+					renderRecommendations(pid, []);
+					return;
+				}
+				const d = r.data || {};
+				const candidates = Array.isArray(d.candidates) ? d.candidates : (Array.isArray(d.reviewers) ? d.reviewers : []);
+				lastRecommendations = candidates;
+				renderRecommendations(pid, candidates);
+				setOutput(`Recommendations loaded: ${candidates.length} candidate(s)`, 'success');
+				notify('Recommendations ready', 'success');
+			};
+
+			const assignReviewer = async (paperId, username) => {
+				const sessionId = $('#session').value.trim();
+				if (!sessionId) {
+					setOutput('Session required for ASSIGN', 'error');
+					notify('Provide session token', 'error');
+					return;
+				}
+				const pid = String(paperId || '').trim();
+				const who = String(username || '').trim();
+				if (!pid || !who) {
+					setOutput('paper_id and reviewer required for ASSIGN', 'error');
+					notify('Missing assign info', 'error');
+					return;
+				}
+				setOutput(`Assigning ${who} to paper ${pid}...`, 'info');
+				const r = await api('/api/command', { command: `ASSIGN ${pid} ${who}`, sessionId });
+				if (!r.ok) {
+					setOutput(`ASSIGN failed: ${JSON.stringify(r, null, 2)}`, 'error');
+					notify('Assign failed', 'error');
+					return;
+				}
+				setOutput(`ASSIGN ok: ${JSON.stringify(r.data || r.payload || r, null, 2)}`, 'success');
+				notify('Reviewer assigned', 'success');
+			};
 
 			const renderPapers = (payload) => {
 				papersPanel.innerHTML = '';
@@ -339,6 +511,8 @@
 					const m = line.match(/\[ID:\s*(\d+)\]\s*(.*?)\s*\(Status:\s*([^)]*)\)/i);
 					const card = document.createElement('div');
 					card.className = 'paper-card';
+					const pid = m ? m[1] : '';
+					if (pid) card.dataset.paperId = pid;
 					const meta = document.createElement('div');
 					meta.className = 'paper-meta';
 					const id = document.createElement('span');
@@ -354,9 +528,51 @@
 					title.className = 'paper-title';
 					title.textContent = m ? m[2] : line;
 					card.append(meta, title);
+					if (pid) {
+						card.style.cursor = 'pointer';
+						card.addEventListener('click', async () => {
+							$('#paper-id').value = pid;
+							await viewPaperById(pid);
+						});
+					}
 					papersPanel.appendChild(card);
 				});
 			};
+
+			const viewPaperById = async (paperId) => {
+				const sessionId = $('#session').value.trim();
+				if (!sessionId) {
+					setOutput('Session required for GET_PAPER', 'error');
+					notify('Provide session token', 'error');
+					return;
+				}
+				const pid = String(paperId || '').trim();
+				if (!pid) {
+					setOutput('paper_id required', 'error');
+					notify('Missing paper_id', 'error');
+					return;
+				}
+				setOutput(`Fetching paper details: ${pid}`, 'info');
+				const r = await api('/api/command', { command: `GET_PAPER ${pid}`, sessionId });
+				if (!r.ok) {
+					setOutput(`GET_PAPER failed: ${JSON.stringify(r, null, 2)}`, 'error');
+					notify('Failed to load paper', 'error');
+					const details = $('#paper-details-output');
+					if (details) details.textContent = `GET_PAPER failed:\n${JSON.stringify(r, null, 2)}`;
+					return;
+				}
+				const d = r.data || {};
+				const fields = Array.isArray(d.fields) ? d.fields.join(',') : '';
+				const details = $('#paper-details-output');
+				if (details) {
+					const header = `Paper #${d.id ?? pid}\nTitle: ${d.title ?? ''}\nStatus: ${d.status ?? ''}\nAuthorId: ${d.authorId ?? ''}\nFields: ${fields || '(none)'}\n----------------\n`;
+					details.textContent = header + (d.content ?? '');
+				}
+				setOutput(`Paper #${d.id ?? pid} :: ${d.title ?? ''} :: Status=${d.status ?? ''} :: Fields=${fields || '(none)'}`, 'success');
+				setOutput(`GET_PAPER data: ${JSON.stringify(d, null, 2)}`, 'info');
+				notify('Paper loaded', 'success');
+			};
+
 
 			const handlePing = async () => { setOutput('Pinging host...', 'info'); const r = await api('/api/ping'); if (r.ok) { setOutput(`Response: ${JSON.stringify(r, null, 2)}`, 'success'); notify('Host reachable', 'success'); } };
 			const handleHealth = async () => { setOutput('Running diagnostics...', 'info'); const r = await api('/api/health'); if (r.ok) { setOutput(`Diagnostics: ${JSON.stringify(r, null, 2)}`, 'success'); notify('System healthy', 'success'); } };
@@ -406,6 +622,8 @@
 
 			const quickItems = [
 				{ cmd: 'LIST_PAPERS' },
+				{ cmd: 'GET_PAPER [ID]' },
+				{ cmd: 'LIST_REVIEWS [PAPER_ID]' },
 				{ cmd: 'ASSIGN [PAPER_ID] [REVIEWER]' },
 				{ cmd: 'MAKE_FINAL_DECISION [PAPER_ID] ACCEPT' },
 				{ cmd: 'MAKE_FINAL_DECISION [PAPER_ID] REJECT' },
@@ -432,6 +650,17 @@
 			document.getElementById('clear-command').addEventListener('click', () => { $('#command').value = ''; $('#command').focus(); });
 			document.getElementById('copy-output').addEventListener('click', () => { navigator.clipboard.writeText($('#output').textContent); notify('Log copied', 'success'); });
 			listBtn.addEventListener('click', toggleList);
+			document.getElementById('load-recommendations').addEventListener('click', loadRecommendations);
+			document.getElementById('view-paper').addEventListener('click', async () => {
+				await viewPaperById($('#paper-id').value);
+			});
+			document.getElementById('clear-paper').addEventListener('click', () => {
+				$('#paper-id').value = '';
+				$('#paper-id').focus();
+				const details = $('#paper-details-output');
+				if (details) details.textContent = 'No paper loaded.';
+			});
+			$('#paper-id').addEventListener('keypress', (e) => { if (e.key === 'Enter') viewPaperById($('#paper-id').value); });
 			$('#command').addEventListener('keypress', (e) => { if (e.key === 'Enter') submitCommand(); });
 
 			const helpListHost = $('#help-list');

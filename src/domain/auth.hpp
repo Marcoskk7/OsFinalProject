@@ -74,6 +74,9 @@ public:
     // 根据用户名查找用户 ID（用于分配审稿人等场景）
     std::optional<UserId> getUserId(const std::string& username) const;
 
+    // 根据用户名查找用户角色（用于权限限制等场景）
+    std::optional<Role> getUserRole(const std::string& username) const;
+
     // 根据会话 ID 查找已有 Session，用于后续请求的鉴权。
     std::optional<Session> validateSession(const std::string& sessionId) const;
 

@@ -955,7 +955,7 @@ void Cli::printAdminNumericMenu() const
 {
     std::cout << "[Admin 数字菜单]\n";
     std::cout << "  1) 列出用户 (MANAGE_USERS LIST)\n";
-    std::cout << "  2) 添加 Reviewer (MANAGE_USERS ADD)\n";
+    std::cout << "  2) 添加用户 (MANAGE_USERS ADD)\n";
     std::cout << "  3) 删除用户 (MANAGE_USERS REMOVE)\n";
     std::cout << "  4) 更新用户角色 (MANAGE_USERS UPDATE_ROLE)\n";
     std::cout << "  5) 重置用户密码 (MANAGE_USERS RESET_PASSWORD)\n";
@@ -981,72 +981,79 @@ bool Cli::handleAdminMenuInput(const std::string& line)
     {
         switch (adminWizard_)
         {
-        case AdminWizard::AddReviewerAskName:
+        case AdminWizard::AddUserAskName:
             tempUsername_ = t;
             std::cout << "输入密码: ";
-            adminWizard_ = AdminWizard::AddReviewerAskPassword;
+            adminWizard_ = AdminWizard::AddUserAskPassword;
             return true;
-        case AdminWizard::AddReviewerAskPassword:
+        case AdminWizard::AddUserAskPassword:
         {
             tempPassword_ = t.empty() ? "123456" : t;
+            tempRole_.clear();
             tempFields_.clear();
 
-            std::cout << "选择审稿人研究领域（可多选）：\n";
-            for (const auto& opt : fieldOptions())
-            {
-                std::cout << "  " << opt.id << ") " << opt.code << " - " << opt.label << "\n";
-            }
-            std::cout << "输入编号或代码（可用空格/逗号分隔多选），直接回车表示不确定方向，输入 done 结束选择: ";
-            adminWizard_ = AdminWizard::AddReviewerAskFields;
+            std::cout << "选择角色类型：\n";
+            std::cout << "  1) Author\n";
+            std::cout << "  2) Reviewer\n";
+            std::cout << "  3) Editor\n";
+            std::cout << "  4) Admin\n";
+            std::cout << "输入编号或角色名（Author/Reviewer/Editor/Admin）: ";
+            adminWizard_ = AdminWizard::AddUserAskRole;
             return true;
         }
 
-        case AdminWizard::AddReviewerAskFields:
+        case AdminWizard::AddUserAskRole:
         {
             if (t.empty())
             {
-                // Finish selection
-                std::vector<std::string> ordered;
-                for (const auto& opt : fieldOptions())
-                {
-                    if (tempFields_.count(opt.code)) ordered.push_back(opt.code);
-                }
-                const std::string fieldsCsv = ordered.empty() ? "NONE" : joinCsv(ordered);
-
-                auto payload = buildJsonPayload("MANAGE_USERS ADD " + tempUsername_ + " " + tempPassword_ + " Reviewer");
-                bool addOk = false;
-                if (auto resp = sendRequest(payload))
-                {
-                    printResponse(*resp);
-                    addOk = resp->payload.value("ok", false);
-                }
-                else
-                {
-                    std::cout << "发送失败\n";
-                }
-
-                if (addOk)
-                {
-                    auto p2 = buildJsonPayload("MANAGE_USERS UPDATE_FIELDS " + tempUsername_ + " " + fieldsCsv);
-                    if (auto r2 = sendRequest(p2))
-                    {
-                        printResponse(*r2);
-                    }
-                    else
-                    {
-                        std::cout << "字段更新发送失败\n";
-                    }
-                }
-
-                std::cout << "输入 c 继续添加 Reviewer，m 返回管理员菜单，其他退出向导: ";
-                adminWizard_ = AdminWizard::PostAddPrompt;
+                std::cout << "角色不能为空。输入编号或角色名（Author/Reviewer/Editor/Admin）: ";
                 return true;
             }
 
             const std::string upper = toUpperCopy(t);
-            if (upper == "DONE" || upper == "D")
+            if (upper == "1" || upper == "AUTHOR") tempRole_ = "Author";
+            else if (upper == "2" || upper == "REVIEWER") tempRole_ = "Reviewer";
+            else if (upper == "3" || upper == "EDITOR") tempRole_ = "Editor";
+            else if (upper == "4" || upper == "ADMIN") tempRole_ = "Admin";
+            else
             {
-                // Same as empty: finish with current selection
+                std::cout << "无效角色。输入编号或角色名（Author/Reviewer/Editor/Admin）: ";
+                return true;
+            }
+
+            if (tempRole_ == "Reviewer")
+            {
+                tempFields_.clear();
+                std::cout << "选择审稿人研究领域（可多选）：\n";
+                for (const auto& opt : fieldOptions())
+                {
+                    std::cout << "  " << opt.id << ") " << opt.code << " - " << opt.label << "\n";
+                }
+                std::cout << "输入编号或代码（可用空格/逗号分隔多选），直接回车表示不确定方向，输入 done 结束选择: ";
+                adminWizard_ = AdminWizard::AddUserAskFields;
+                return true;
+            }
+
+            auto payload = buildJsonPayload("MANAGE_USERS ADD " + tempUsername_ + " " + tempPassword_ + " " + tempRole_);
+            if (auto resp = sendRequest(payload))
+            {
+                printResponse(*resp);
+            }
+            else
+            {
+                std::cout << "发送失败\n";
+            }
+
+            std::cout << "输入 c 继续添加用户，m 返回管理员菜单，其他退出向导: ";
+            adminWizard_ = AdminWizard::PostAddPrompt;
+            return true;
+        }
+
+        case AdminWizard::AddUserAskFields:
+        {
+            // Reviewer fields selection; finish on empty / done
+            if (t.empty() || toUpperCopy(t) == "DONE" || toUpperCopy(t) == "D")
+            {
                 std::vector<std::string> ordered;
                 for (const auto& opt : fieldOptions())
                 {
@@ -1065,6 +1072,7 @@ bool Cli::handleAdminMenuInput(const std::string& line)
                 {
                     std::cout << "发送失败\n";
                 }
+
                 if (addOk)
                 {
                     auto p2 = buildJsonPayload("MANAGE_USERS UPDATE_FIELDS " + tempUsername_ + " " + fieldsCsv);
@@ -1078,7 +1086,7 @@ bool Cli::handleAdminMenuInput(const std::string& line)
                     }
                 }
 
-                std::cout << "输入 c 继续添加 Reviewer，m 返回管理员菜单，其他退出向导: ";
+                std::cout << "输入 c 继续添加用户，m 返回管理员菜单，其他退出向导: ";
                 adminWizard_ = AdminWizard::PostAddPrompt;
                 return true;
             }
@@ -1331,8 +1339,8 @@ bool Cli::handleAdminMenuInput(const std::string& line)
         case AdminWizard::PostAddPrompt:
             if (t == "c" || t == "C")
             {
-                adminWizard_ = AdminWizard::AddReviewerAskName;
-                std::cout << "添加 Reviewer，输入用户名: ";
+                adminWizard_ = AdminWizard::AddUserAskName;
+                std::cout << "添加用户，输入用户名: ";
                 return true;
             }
             if (t == "m" || t == "M")
@@ -1437,8 +1445,8 @@ bool Cli::handleAdminMenuInput(const std::string& line)
     }
     if (t == "2")
     {
-        adminWizard_ = AdminWizard::AddReviewerAskName;
-        std::cout << "添加 Reviewer，输入用户名: ";
+        adminWizard_ = AdminWizard::AddUserAskName;
+        std::cout << "添加用户，输入用户名: ";
         return true;
     }
     if (t == "3")

@@ -266,6 +266,16 @@ std::optional<UserId> AuthService::getUserId(const std::string& username) const
     return it->second.id;
 }
 
+std::optional<Role> AuthService::getUserRole(const std::string& username) const
+{
+    auto it = usersByName_.find(username);
+    if (it == usersByName_.end())
+    {
+        return std::nullopt;
+    }
+    return it->second.role;
+}
+
 std::optional<Session> AuthService::validateSession(const std::string& sessionId) const
 {
     auto it = sessionsById_.find(sessionId);
