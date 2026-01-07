@@ -2,6 +2,7 @@
 
 #include <iostream>
 #include <string_view>
+#include <thread>
 
 namespace osp
 {
@@ -25,7 +26,7 @@ inline void log(LogLevel level, std::string_view msg)
     case LogLevel::Error: tag = "[ERROR]"; break;
     }
 
-    std::clog << tag << ' ' << msg << '\n';
+    std::clog << tag << " [tid=" << std::this_thread::get_id() << "] " << msg << '\n';
 }
 
 } // namespace osp

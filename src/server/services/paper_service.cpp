@@ -1,241 +1,157 @@
-#include "server_app.hpp"
+#include "paper_service.hpp"
 
+#include "domain/paper.hpp"
+#include "domain/permissions.hpp"
+#include "domain/review.hpp"
 #include "server/handlers/command_utils.hpp"
 
 #include <algorithm>
 #include <cctype>
-#include <set>
-#include <vector>
-#include <sstream>
-#include <cstdlib>
 #include <filesystem>
+#include <optional>
+#include <set>
+#include <sstream>
+#include <string>
+#include <vector>
 
 namespace osp::server
 {
 
-namespace
+osp::protocol::Message PaperService::recommendReviewers(const osp::protocol::Command& cmd,
+                                                       const std::optional<osp::domain::Session>& maybeSession)
 {
-std::size_t clampCacheCapacity(std::size_t v)
-{
-    // 防止极端值导致内存占用过大；课程项目里给一个温和上限即可
-    constexpr std::size_t kMax = 4096;
-    if (v > kMax) return kMax;
-    return v;
-}
-} // namespace
+    using osp::protocol::json;
 
-ServerApp::ServerApp(std::uint16_t port, std::size_t cacheCapacity, std::size_t threadPoolSize)
-    : port_(port)
-    , threadPoolSize_(threadPoolSize)
-    , vfs_(clampCacheCapacity(cacheCapacity))
-    , auth_()
-    , fsService_(vfs_, vfsMutex_)
-    , paperService_(vfs_, vfsMutex_, auth_, authMutex_)
-    , adminHandler_(vfs_, vfsMutex_, auth_, authMutex_)
-    , editorHandler_(paperService_)
-    , authorHandler_(paperService_)
-    , reviewerHandler_(paperService_)
-{
-    // 用户数据将在 run() 中 VFS 挂载后从文件系统加载
-}
+    if (!maybeSession)
+    {
+        return osp::protocol::makeErrorResponse("AUTH_REQUIRED", "RECOMMEND_REVIEWERS: need to login first");
+    }
+    if (maybeSession->role != osp::Role::Editor && maybeSession->role != osp::Role::Admin)
+    {
+        return osp::protocol::makeErrorResponse("PERMISSION_DENIED", "RECOMMEND_REVIEWERS: permission denied");
+    }
+    if (cmd.args.empty())
+    {
+        return osp::protocol::makeErrorResponse("MISSING_ARGS", "Usage: RECOMMEND_REVIEWERS <PaperID> [limit]");
+    }
 
-void ServerApp::run()
-{
-    running_.store(true);
-    osp::log(osp::LogLevel::Info,
-             "Server starting on port " + std::to_string(port_)
-                 + " (cacheCapacity=" + std::to_string(vfs_.cacheCapacity())
-                 + ", threadPoolSize=" + std::to_string(threadPoolSize_) + ")");
+    const std::string pidStr = cmd.args[0];
+    std::size_t       limit  = 5;
+    if (cmd.args.size() >= 2)
+    {
+        try
+        {
+            limit = static_cast<std::size_t>(std::stoul(cmd.args[1]));
+        }
+        catch (...)
+        {
+            return osp::protocol::makeErrorResponse("INVALID_ARGS", "RECOMMEND_REVIEWERS: invalid limit");
+        }
+        if (limit == 0) limit = 5;
+    }
 
-    // 挂载简化 VFS
+    // Load paper fields
+    std::set<std::string> paperFields;
     {
         std::lock_guard<std::mutex> lock(vfsMutex_);
-        vfs_.mount("data.fs");
+        const std::string           metaPath = "/papers/" + pidStr + "/meta.txt";
+        if (!vfs_.readFile(metaPath))
+        {
+            return osp::protocol::makeErrorResponse("NOT_FOUND", "Paper not found: " + pidStr);
+        }
+
+        const std::string fieldsPath = "/papers/" + pidStr + "/fields.txt";
+        if (auto f = vfs_.readFile(fieldsPath))
+        {
+            paperFields = osp::server::utils::toFieldSet(osp::server::utils::splitFieldsCsv(*f));
+        }
     }
 
-    // 初始化 AuthService 的 VFS 操作接口
-    initAuthVfsOperations();
-
-    // 从 VFS 加载用户数据
+    struct ReviewerInfo
     {
-        std::lock_guard<std::mutex> authLock(authMutex_);
-        auth_.loadUsers();
-
-        // 如果没有用户数据，初始化默认账号
-        if (auth_.getAllUsers().empty())
+        std::string   username;
+        std::uint32_t userId{};
+    };
+    std::vector<ReviewerInfo> reviewers;
+    {
+        std::lock_guard<std::mutex> lock(authMutex_);
+        for (const auto& u : auth_.getAllUsers())
         {
-            osp::log(osp::LogLevel::Info, "No users found, creating default accounts...");
-            auth_.addUser("admin", "admin", osp::Role::Admin);
-            auth_.addUser("author", "author", osp::Role::Author);
-            auth_.addUser("author2", "author2", osp::Role::Author);
-            auth_.addUser("reviewer", "reviewer", osp::Role::Reviewer);
-            auth_.addUser("editor", "editor", osp::Role::Editor);
-        }
-        else
-        {
-            osp::log(osp::LogLevel::Info, 
-                     "Loaded " + std::to_string(auth_.getAllUsers().size()) + " users from VFS");
+            if (u.role() != osp::Role::Reviewer) continue;
+            reviewers.push_back({u.username(), u.id()});
         }
     }
 
-    // 使用多线程 TCP 服务器
-    osp::net::TcpServer tcpServer(port_, threadPoolSize_);
+    struct Candidate
+    {
+        std::string              username;
+        std::uint32_t            userId{};
+        std::size_t              score{};
+        std::vector<std::string> matched;
+        std::vector<std::string> reviewerFields;
+    };
 
-    tcpServer.start([this](const osp::protocol::Message& req) {
-        return handleRequest(req);
+    std::vector<Candidate> candidates;
+    candidates.reserve(reviewers.size());
+
+    for (const auto& r : reviewers)
+    {
+        std::set<std::string>      reviewerFieldSet;
+        std::vector<std::string>   reviewerFields;
+        {
+            std::lock_guard<std::mutex> lock(vfsMutex_);
+            vfs_.createDirectory("/system");
+            vfs_.createDirectory("/system/reviewer_fields");
+            const std::string path = "/system/reviewer_fields/" + std::to_string(r.userId) + ".txt";
+            if (auto f = vfs_.readFile(path))
+            {
+                reviewerFields   = osp::server::utils::splitFieldsCsv(*f);
+                reviewerFieldSet = osp::server::utils::toFieldSet(reviewerFields);
+            }
+        }
+
+        auto              matched = osp::server::utils::intersectionFields(paperFields, reviewerFieldSet);
+        const std::size_t score   = matched.size();
+        candidates.push_back({r.username, r.userId, score, matched, reviewerFields});
+    }
+
+    std::sort(candidates.begin(), candidates.end(), [](const Candidate& a, const Candidate& b) {
+        if (a.score != b.score) return a.score > b.score;
+        return a.username < b.username;
     });
 
-    osp::log(osp::LogLevel::Info, "Server shutting down");
-}
-
-void ServerApp::initAuthVfsOperations()
-{
-    osp::domain::VfsOperations ops;
-
-    // 创建目录
-    ops.createDirectory = [this](const std::string& path) -> bool {
-        std::lock_guard<std::mutex> lock(vfsMutex_);
-        return vfs_.createDirectory(path);
-    };
-
-    // 写文件
-    ops.writeFile = [this](const std::string& path, const std::string& content) -> bool {
-        std::lock_guard<std::mutex> lock(vfsMutex_);
-        return vfs_.writeFile(path, content);
-    };
-
-    // 读文件
-    ops.readFile = [this](const std::string& path) -> std::optional<std::string> {
-        std::lock_guard<std::mutex> lock(vfsMutex_);
-        return vfs_.readFile(path);
-    };
-
-    // 删除文件
-    ops.removeFile = [this](const std::string& path) -> bool {
-        std::lock_guard<std::mutex> lock(vfsMutex_);
-        return vfs_.removeFile(path);
-    };
-
-    // 列出目录
-    ops.listDirectory = [this](const std::string& path) -> std::optional<std::string> {
-        std::lock_guard<std::mutex> lock(vfsMutex_);
-        return vfs_.listDirectory(path);
-    };
-
-    // 设置到 AuthService（需要在 authMutex_ 保护下）
-    std::lock_guard<std::mutex> authLock(authMutex_);
-    auth_.setVfsOperations(ops);
-
-    osp::log(osp::LogLevel::Info, "AuthService VFS persistence enabled");
-}
-
-void ServerApp::stop()
-{
-    running_.store(false);
-}
-
-osp::protocol::Message ServerApp::handleRequest(const osp::protocol::Message& req)
-{
-    using osp::protocol::Message;
-    using osp::protocol::MessageType;
-    using osp::protocol::Command;
-    using osp::protocol::json;
-
-    if (req.type != MessageType::CommandRequest)
+    if (candidates.size() > limit)
     {
-        return osp::protocol::makeErrorResponse("INVALID_TYPE", "Unsupported message type");
+        candidates.resize(limit);
     }
 
-    osp::log(osp::LogLevel::Info, "Received request payload: " + req.payload.dump());
-
-    // 从 JSON payload 解析 Command
-    Command cmd = osp::protocol::parseCommandFromJson(req.payload);
-    if (cmd.name.empty())
+    json out;
+    out["paperId"] = pidStr;
     {
-        return osp::protocol::makeErrorResponse("EMPTY_COMMAND", "Empty command");
+        json pf = json::array();
+        for (const auto& f : paperFields) pf.push_back(f);
+        out["paperFields"] = pf;
     }
-
-    // 如果携带了 Session ID，则在此统一校验会话是否有效
-    std::optional<osp::domain::Session> maybeSession;
-    if (!cmd.sessionId.empty())
+    json arr = json::array();
+    for (const auto& c : candidates)
     {
-        std::lock_guard<std::mutex> lock(authMutex_);
-        auto s = auth_.validateSession(cmd.sessionId);
-        if (!s)
-        {
-            return osp::protocol::makeErrorResponse("INVALID_SESSION", "Invalid or expired session");
-        }
-        maybeSession = *s;
+        json m = json::array();
+        for (const auto& f : c.matched) m.push_back(f);
+        json rf = json::array();
+        for (const auto& f : c.reviewerFields) rf.push_back(f);
+        arr.push_back({{"username", c.username},
+                       {"userId", c.userId},
+                       {"score", c.score},
+                       {"matchedFields", m},
+                       {"reviewerFields", rf}});
     }
-
-    return handleCommand(cmd, maybeSession);
+    out["candidates"] = arr;
+    return osp::protocol::makeSuccessResponse(out);
 }
 
-osp::protocol::Message ServerApp::handleCommand(const osp::protocol::Command&           cmd,
-                                                const std::optional<osp::domain::Session>& maybeSession)
+osp::protocol::Message PaperService::handlePaperCommand(const osp::protocol::Command& cmd,
+                                                       const std::optional<osp::domain::Session>& maybeSession)
 {
-    using osp::protocol::Message;
-    using osp::protocol::MessageType;
-    using osp::protocol::json;
-
-    // PING
-    if (cmd.name == "PING")
-    {
-        return osp::protocol::makeSuccessResponse({{"message", "PONG"}});
-    }
-
-    // LOGIN
-    if (cmd.name == "LOGIN")
-    {
-        if (cmd.args.size() < 2)
-        {
-            return osp::protocol::makeErrorResponse("MISSING_ARGS", "LOGIN: missing username or password");
-        }
-
-        osp::Credentials cred;
-        cred.username = cmd.args[0];
-        cred.password = cmd.args[1];
-
-        std::lock_guard<std::mutex> lock(authMutex_);
-        auto session = auth_.login(cred);
-        if (!session)
-        {
-            return osp::protocol::makeErrorResponse("LOGIN_FAILED", "LOGIN failed: invalid credentials");
-        }
-
-        json data;
-        data["sessionId"] = session->id;
-        data["userId"] = session->userId;
-        data["username"] = session->username;
-        data["role"] = osp::server::utils::roleToString(session->role);
-
-        return osp::protocol::makeSuccessResponse(data);
-    }
-
-    // 角色处理器：按职责拆分（处理器内部自行做权限检查）
-    if (auto r = adminHandler_.tryHandle(cmd, maybeSession)) return *r;
-    if (auto r = editorHandler_.tryHandle(cmd, maybeSession)) return *r;
-    if (auto r = authorHandler_.tryHandle(cmd, maybeSession)) return *r;
-    if (auto r = reviewerHandler_.tryHandle(cmd, maybeSession)) return *r;
-
-    // FS 命令（不绑定角色）
-    if (auto r = fsService_.tryHandle(cmd)) return *r;
-
-    return osp::protocol::makeErrorResponse("UNKNOWN_COMMAND", "Unknown command: " + cmd.name);
-}
-
-#if 0
-// 旧实现已迁移到：
-// - PaperService: src/server/services/paper_service.{hpp,cpp}
-// - FsService   : src/server/services/fs_service.{hpp,cpp}
-// - Admin/Editor/Author/Reviewer handlers: src/server/handlers/*
-
-osp::protocol::Message
-ServerApp::handlePaperCommand(const osp::protocol::Command&                        cmd,
-                              const std::optional<osp::domain::Session>& maybeSession)
-{
-    using osp::protocol::Message;
-    using osp::protocol::MessageType;
     using osp::protocol::json;
     using osp::domain::Permission;
     using osp::domain::hasPermission;
@@ -264,7 +180,7 @@ ServerApp::handlePaperCommand(const osp::protocol::Command&                     
             std::lock_guard<std::mutex> lock(vfsMutex_);
             listing = vfs_.listDirectory("/papers");
         }
-        
+
         if (!listing)
         {
             return osp::protocol::makeSuccessResponse({{"papers", json::array()}});
@@ -289,7 +205,7 @@ ServerApp::handlePaperCommand(const osp::protocol::Command&                     
                 std::lock_guard<std::mutex> lock(vfsMutex_);
                 metaData = vfs_.readFile(metaPath);
             }
-            
+
             if (!metaData)
             {
                 continue;
@@ -324,7 +240,7 @@ ServerApp::handlePaperCommand(const osp::protocol::Command&                     
                     std::lock_guard<std::mutex> lock(vfsMutex_);
                     reviewersData = vfs_.readFile(reviewersPath);
                 }
-                
+
                 bool assigned = false;
                 if (reviewersData)
                 {
@@ -346,12 +262,7 @@ ServerApp::handlePaperCommand(const osp::protocol::Command&                     
                 }
             }
 
-            papers.push_back({
-                {"id", p_id},
-                {"title", p_title},
-                {"status", p_status},
-                {"authorId", p_authorId}
-            });
+            papers.push_back({{"id", p_id}, {"title", p_title}, {"status", p_status}, {"authorId", p_authorId}});
         }
 
         return osp::protocol::makeSuccessResponse({{"papers", papers}});
@@ -359,18 +270,15 @@ ServerApp::handlePaperCommand(const osp::protocol::Command&                     
 
     if (cmd.name == "SET_PAPER_FIELDS")
     {
-        if (!maybeSession)
-        {
-            return osp::protocol::makeErrorResponse("AUTH_REQUIRED", "Authentication required");
-        }
         if (cmd.args.empty())
         {
             return osp::protocol::makeErrorResponse("MISSING_ARGS", "Usage: SET_PAPER_FIELDS <PaperID> <fieldsCsv|NONE>");
         }
 
-        const std::string pidStr = cmd.args[0];
-        const std::string paperDir = "/papers/" + pidStr;
-        const std::string metaPath = paperDir + "/meta.txt";
+        const std::string pidStr    = cmd.args[0];
+        const std::string paperDir  = "/papers/" + pidStr;
+        const std::string metaPath  = paperDir + "/meta.txt";
+        const std::string fieldsPath = paperDir + "/fields.txt";
 
         std::optional<std::string> metaData;
         {
@@ -393,7 +301,8 @@ ServerApp::handlePaperCommand(const osp::protocol::Command&                     
 
         if (isAuthor && p_authorId != maybeSession->userId)
         {
-            return osp::protocol::makeErrorResponse("PERMISSION_DENIED", "Permission denied: You can only modify your own papers");
+            return osp::protocol::makeErrorResponse("PERMISSION_DENIED",
+                                                    "Permission denied: You can only modify your own papers");
         }
         if (!isAdmin && !isEditor && !isAuthor)
         {
@@ -413,7 +322,7 @@ ServerApp::handlePaperCommand(const osp::protocol::Command&                     
         }
         else
         {
-            auto fields = splitFieldsCsv(fieldsCsv);
+            auto fields = osp::server::utils::splitFieldsCsv(fieldsCsv);
             for (std::size_t i = 0; i < fields.size(); ++i)
             {
                 if (i) toWrite += ',';
@@ -421,7 +330,6 @@ ServerApp::handlePaperCommand(const osp::protocol::Command&                     
             }
         }
 
-        const std::string fieldsPath = paperDir + "/fields.txt";
         {
             std::lock_guard<std::mutex> lock(vfsMutex_);
             if (!vfs_.writeFile(fieldsPath, toWrite))
@@ -431,16 +339,13 @@ ServerApp::handlePaperCommand(const osp::protocol::Command&                     
         }
 
         json fieldsArr = json::array();
-        for (const auto& f : splitFieldsCsv(toWrite))
+        for (const auto& f : osp::server::utils::splitFieldsCsv(toWrite))
         {
             fieldsArr.push_back(f);
         }
 
-        return osp::protocol::makeSuccessResponse({
-            {"message", "Paper fields updated"},
-            {"paperId", pidStr},
-            {"fields", fieldsArr}
-        });
+        return osp::protocol::makeSuccessResponse(
+            {{"message", "Paper fields updated"}, {"paperId", pidStr}, {"fields", fieldsArr}});
     }
 
     if (cmd.name == "GET_PAPER")
@@ -450,8 +355,8 @@ ServerApp::handlePaperCommand(const osp::protocol::Command&                     
             return osp::protocol::makeErrorResponse("MISSING_ARGS", "Usage: GET_PAPER <PaperID>");
         }
 
-        std::string pidStr   = cmd.args[0];
-        std::string metaPath = "/papers/" + pidStr + "/meta.txt";
+        std::string pidStr     = cmd.args[0];
+        std::string metaPath   = "/papers/" + pidStr + "/meta.txt";
         std::string fieldsPath = "/papers/" + pidStr + "/fields.txt";
 
         std::optional<std::string> metaData;
@@ -461,7 +366,7 @@ ServerApp::handlePaperCommand(const osp::protocol::Command&                     
             metaData = vfs_.readFile(metaPath);
             fieldsData = vfs_.readFile(fieldsPath);
         }
-        
+
         if (!metaData)
         {
             return osp::protocol::makeErrorResponse("NOT_FOUND", "Paper not found");
@@ -480,7 +385,8 @@ ServerApp::handlePaperCommand(const osp::protocol::Command&                     
 
         if (maybeSession->role == osp::Role::Author && p_authorId != maybeSession->userId)
         {
-            return osp::protocol::makeErrorResponse("PERMISSION_DENIED", "Permission denied: You can only view your own papers");
+            return osp::protocol::makeErrorResponse("PERMISSION_DENIED",
+                                                    "Permission denied: You can only view your own papers");
         }
 
         if (maybeSession->role == osp::Role::Reviewer)
@@ -491,7 +397,7 @@ ServerApp::handlePaperCommand(const osp::protocol::Command&                     
                 std::lock_guard<std::mutex> lock(vfsMutex_);
                 reviewersData = vfs_.readFile(reviewersPath);
             }
-            
+
             bool assigned = false;
             if (reviewersData)
             {
@@ -509,7 +415,8 @@ ServerApp::handlePaperCommand(const osp::protocol::Command&                     
             }
             if (!assigned)
             {
-                return osp::protocol::makeErrorResponse("PERMISSION_DENIED", "Permission denied: You are not assigned to this paper");
+                return osp::protocol::makeErrorResponse("PERMISSION_DENIED",
+                                                        "Permission denied: You are not assigned to this paper");
             }
         }
 
@@ -521,16 +428,16 @@ ServerApp::handlePaperCommand(const osp::protocol::Command&                     
         }
 
         json data;
-        data["id"] = p_id;
-        data["title"] = p_title;
-        data["status"] = p_status;
+        data["id"]       = p_id;
+        data["title"]    = p_title;
+        data["status"]   = p_status;
         data["authorId"] = p_authorId;
-        data["content"] = contentData ? *contentData : "";
+        data["content"]  = contentData ? *contentData : "";
 
         json fieldsArr = json::array();
         if (fieldsData)
         {
-            for (const auto& f : splitFieldsCsv(*fieldsData))
+            for (const auto& f : osp::server::utils::splitFieldsCsv(*fieldsData))
             {
                 fieldsArr.push_back(f);
             }
@@ -573,8 +480,8 @@ ServerApp::handlePaperCommand(const osp::protocol::Command&                     
             return osp::protocol::makeErrorResponse("INVALID_ARGS", "SUBMIT: Content is empty");
         }
 
-        std::uint32_t pid = nextPaperId();
-        std::string paperDir = "/papers/" + std::to_string(pid);
+        std::uint32_t pid      = nextPaperId();
+        std::string   paperDir = "/papers/" + std::to_string(pid);
 
         {
             std::lock_guard<std::mutex> lock(vfsMutex_);
@@ -591,10 +498,8 @@ ServerApp::handlePaperCommand(const osp::protocol::Command&                     
             }
 
             std::ostringstream meta;
-            meta << pid << "\n"
-                 << maybeSession->userId << "\n"
-                 << osp::domain::paperStatusToString(osp::domain::PaperStatus::Submitted) << "\n"
-                 << title;
+            meta << pid << "\n" << maybeSession->userId << "\n"
+                 << osp::domain::paperStatusToString(osp::domain::PaperStatus::Submitted) << "\n" << title;
 
             if (!vfs_.writeFile(paperDir + "/meta.txt", meta.str()))
             {
@@ -610,7 +515,8 @@ ServerApp::handlePaperCommand(const osp::protocol::Command&                     
         // 只有Author角色可以执行REVISE命令
         if (maybeSession->role != osp::Role::Author)
         {
-            return osp::protocol::makeErrorResponse("PERMISSION_DENIED", "Permission denied: Only Author role can revise papers");
+            return osp::protocol::makeErrorResponse("PERMISSION_DENIED",
+                                                    "Permission denied: Only Author role can revise papers");
         }
 
         if (cmd.rawArgs.empty())
@@ -637,9 +543,9 @@ ServerApp::handlePaperCommand(const osp::protocol::Command&                     
             return osp::protocol::makeErrorResponse("INVALID_ARGS", "REVISE: content is empty");
         }
 
-        const std::string paperDir = "/papers/" + pidStr;
-        const std::string metaPath = paperDir + "/meta.txt";
-        const std::string contentPath = paperDir + "/content.txt";
+        const std::string paperDir     = "/papers/" + pidStr;
+        const std::string metaPath     = paperDir + "/meta.txt";
+        const std::string contentPath  = paperDir + "/content.txt";
         const std::string revisionsDir = paperDir + "/revisions";
 
         // 读 meta，校验作者
@@ -667,24 +573,21 @@ ServerApp::handlePaperCommand(const osp::protocol::Command&                     
         metaSS.get(dummy);
         std::getline(metaSS, p_title);
 
-        // Author只能修改自己的论文（即LIST_PAPERS中显示的论文）
-        // 检查论文作者ID是否等于当前用户ID，确保只能修改自己paper list中的论文
         if (p_authorId != maybeSession->userId)
         {
-            return osp::protocol::makeErrorResponse("PERMISSION_DENIED", "Permission denied: You can only revise papers in your own paper list");
+            return osp::protocol::makeErrorResponse("PERMISSION_DENIED",
+                                                    "Permission denied: You can only revise papers in your own paper list");
         }
 
         std::uint32_t newVersion = 1;
         {
             std::lock_guard<std::mutex> lock(vfsMutex_);
 
-            // 确保 revisions 目录存在（不存在则创建）
             if (!vfs_.listDirectory(revisionsDir))
             {
                 vfs_.createDirectory(revisionsDir);
             }
 
-            // 计算下一个版本号：扫描 vN.txt
             if (auto listing = vfs_.listDirectory(revisionsDir))
             {
                 std::stringstream ss(*listing);
@@ -696,7 +599,6 @@ ServerApp::handlePaperCommand(const osp::protocol::Command&                     
                     {
                         continue;
                     }
-                    // 期望格式：v<number>.txt
                     if (entry.size() >= 6 && entry.front() == 'v' && entry.rfind(".txt") == entry.size() - 4)
                     {
                         const std::string numStr = entry.substr(1, entry.size() - 1 - 4);
@@ -707,44 +609,35 @@ ServerApp::handlePaperCommand(const osp::protocol::Command&                     
                         }
                         catch (...)
                         {
-                            // ignore
                         }
                     }
                 }
                 newVersion = maxV + 1;
             }
 
-            // 保存旧内容到 revisions
-            const std::string revPath = revisionsDir + "/v" + std::to_string(newVersion) + ".txt";
-            const auto        oldContent = vfs_.readFile(contentPath);
+            const std::string revPath     = revisionsDir + "/v" + std::to_string(newVersion) + ".txt";
+            const auto        oldContent  = vfs_.readFile(contentPath);
             if (!vfs_.writeFile(revPath, oldContent ? *oldContent : std::string{}))
             {
                 return osp::protocol::makeErrorResponse("FS_ERROR", "REVISE failed: cannot save revision history");
             }
 
-            // 写入新内容
             if (!vfs_.writeFile(contentPath, newContent))
             {
                 return osp::protocol::makeErrorResponse("FS_ERROR", "REVISE failed: cannot write new content");
             }
 
-            // 更新 meta 状态为 Submitted（重新进入提交态）
             std::ostringstream newMeta;
-            newMeta << p_id << "\n"
-                    << p_authorId << "\n"
-                    << osp::domain::paperStatusToString(osp::domain::PaperStatus::Submitted) << "\n"
-                    << p_title;
+            newMeta << p_id << "\n" << p_authorId << "\n"
+                    << osp::domain::paperStatusToString(osp::domain::PaperStatus::Submitted) << "\n" << p_title;
             if (!vfs_.writeFile(metaPath, newMeta.str()))
             {
                 return osp::protocol::makeErrorResponse("FS_ERROR", "REVISE failed: cannot update meta");
             }
         }
 
-        return osp::protocol::makeSuccessResponse({
-            {"message", "Revision submitted successfully"},
-            {"paperId", pidStr},
-            {"revision", newVersion}
-        });
+        return osp::protocol::makeSuccessResponse(
+            {{"message", "Revision submitted successfully"}, {"paperId", pidStr}, {"revision", newVersion}});
     }
 
     if (cmd.name == "ASSIGN")
@@ -764,7 +657,7 @@ ServerApp::handlePaperCommand(const osp::protocol::Command&                     
 
         std::string paperDir = "/papers/" + pidStr;
         std::string metaPath = paperDir + "/meta.txt";
-        
+
         {
             std::lock_guard<std::mutex> lock(vfsMutex_);
             if (!vfs_.readFile(metaPath))
@@ -778,15 +671,15 @@ ServerApp::handlePaperCommand(const osp::protocol::Command&                     
             std::lock_guard<std::mutex> lock(authMutex_);
             reviewerIdOpt = auth_.getUserId(reviewerName);
         }
-        
+
         if (!reviewerIdOpt)
         {
             return osp::protocol::makeErrorResponse("NOT_FOUND", "User not found: " + reviewerName);
         }
 
-        std::string reviewersPath   = paperDir + "/reviewers.txt";
+        std::string reviewersPath    = paperDir + "/reviewers.txt";
         std::string currentReviewers;
-        
+
         {
             std::lock_guard<std::mutex> lock(vfsMutex_);
             auto existing = vfs_.readFile(reviewersPath);
@@ -812,11 +705,12 @@ ServerApp::handlePaperCommand(const osp::protocol::Command&                     
 
         if (alreadyAssigned)
         {
-            return osp::protocol::makeErrorResponse("ALREADY_ASSIGNED", "Reviewer " + reviewerName + " is already assigned to this paper");
+            return osp::protocol::makeErrorResponse("ALREADY_ASSIGNED",
+                                                    "Reviewer " + reviewerName + " is already assigned to this paper");
         }
 
         currentReviewers += newEntry + "\n";
-        
+
         {
             std::lock_guard<std::mutex> lock(vfsMutex_);
             if (!vfs_.writeFile(reviewersPath, currentReviewers))
@@ -825,12 +719,11 @@ ServerApp::handlePaperCommand(const osp::protocol::Command&                     
             }
         }
 
-        return osp::protocol::makeSuccessResponse({
-            {"message", "Reviewer assigned"},
-            {"paperId", pidStr},
-            {"reviewer", reviewerName},
-            {"reviewerId", *reviewerIdOpt}
-        });
+        return osp::protocol::makeSuccessResponse(
+            {{"message", "Reviewer assigned"},
+             {"paperId", pidStr},
+             {"reviewer", reviewerName},
+             {"reviewerId", *reviewerIdOpt}});
     }
 
     if (cmd.name == "REVIEW")
@@ -842,15 +735,16 @@ ServerApp::handlePaperCommand(const osp::protocol::Command&                     
 
         if (cmd.args.size() < 3)
         {
-            return osp::protocol::makeErrorResponse("MISSING_ARGS", "Usage: REVIEW <PaperID> <Decision> <Comments...>\nDecisions: ACCEPT, REJECT, MINOR, MAJOR");
+            return osp::protocol::makeErrorResponse(
+                "MISSING_ARGS",
+                "Usage: REVIEW <PaperID> <Decision> <Comments...>\nDecisions: ACCEPT, REJECT, MINOR, MAJOR");
         }
 
         std::string pidStr      = cmd.args[0];
         std::string decisionStr = cmd.args[1];
 
-        // 提取评论内容
         std::string comments;
-        size_t decisionPos = cmd.rawArgs.find(decisionStr);
+        size_t      decisionPos = cmd.rawArgs.find(decisionStr);
         if (decisionPos != std::string::npos)
         {
             size_t commentsStart = decisionPos + decisionStr.length();
@@ -875,13 +769,13 @@ ServerApp::handlePaperCommand(const osp::protocol::Command&                     
 
         std::string paperDir      = "/papers/" + pidStr;
         std::string reviewersPath = paperDir + "/reviewers.txt";
-        
+
         std::optional<std::string> reviewersData;
         {
             std::lock_guard<std::mutex> lock(vfsMutex_);
             reviewersData = vfs_.readFile(reviewersPath);
         }
-        
+
         bool assigned = false;
         if (reviewersData)
         {
@@ -900,11 +794,12 @@ ServerApp::handlePaperCommand(const osp::protocol::Command&                     
 
         if (!assigned)
         {
-            return osp::protocol::makeErrorResponse("PERMISSION_DENIED", "Permission denied: You are not assigned to review this paper");
+            return osp::protocol::makeErrorResponse("PERMISSION_DENIED",
+                                                    "Permission denied: You are not assigned to review this paper");
         }
 
-        std::string reviewsDir = paperDir + "/reviews";
-        std::string reviewPath = reviewsDir + "/" + std::to_string(maybeSession->userId) + ".txt";
+        std::string reviewsDir  = paperDir + "/reviews";
+        std::string reviewPath  = reviewsDir + "/" + std::to_string(maybeSession->userId) + ".txt";
 
         std::ostringstream reviewContent;
         reviewContent << decisionStr << "\n" << comments;
@@ -919,11 +814,8 @@ ServerApp::handlePaperCommand(const osp::protocol::Command&                     
             }
         }
 
-        return osp::protocol::makeSuccessResponse({
-            {"message", "Review submitted successfully"},
-            {"paperId", pidStr},
-            {"decision", decisionStr}
-        });
+        return osp::protocol::makeSuccessResponse(
+            {{"message", "Review submitted successfully"}, {"paperId", pidStr}, {"decision", decisionStr}});
     }
 
     if (cmd.name == "LIST_REVIEWS")
@@ -941,7 +833,7 @@ ServerApp::handlePaperCommand(const osp::protocol::Command&                     
             std::lock_guard<std::mutex> lock(vfsMutex_);
             metaData = vfs_.readFile(metaPath);
         }
-        
+
         if (!metaData)
         {
             return osp::protocol::makeErrorResponse("NOT_FOUND", "Paper not found");
@@ -958,7 +850,8 @@ ServerApp::handlePaperCommand(const osp::protocol::Command&                     
 
         if (isAuthor && p_authorId != maybeSession->userId)
         {
-            return osp::protocol::makeErrorResponse("PERMISSION_DENIED", "Permission denied: You can only view reviews for your own papers");
+            return osp::protocol::makeErrorResponse("PERMISSION_DENIED",
+                                                    "Permission denied: You can only view reviews for your own papers");
         }
 
         if (!isEditor && !isAdmin && !isAuthor)
@@ -972,7 +865,7 @@ ServerApp::handlePaperCommand(const osp::protocol::Command&                     
             std::lock_guard<std::mutex> lock(vfsMutex_);
             listing = vfs_.listDirectory(reviewsDir);
         }
-        
+
         if (!listing)
         {
             return osp::protocol::makeSuccessResponse({{"reviews", json::array()}});
@@ -986,14 +879,14 @@ ServerApp::handlePaperCommand(const osp::protocol::Command&                     
         {
             if (entry.empty())
                 continue;
-            
+
             std::string reviewPath = reviewsDir + "/" + entry;
             std::optional<std::string> reviewContent;
             {
                 std::lock_guard<std::mutex> lock(vfsMutex_);
                 reviewContent = vfs_.readFile(reviewPath);
             }
-            
+
             if (!reviewContent)
                 continue;
 
@@ -1006,7 +899,6 @@ ServerApp::handlePaperCommand(const osp::protocol::Command&                     
             {
                 comments += line + "\n";
             }
-            // 去掉末尾换行
             if (!comments.empty() && comments.back() == '\n')
             {
                 comments.pop_back();
@@ -1014,11 +906,7 @@ ServerApp::handlePaperCommand(const osp::protocol::Command&                     
 
             std::string reviewerIdStr = entry.substr(0, entry.find('.'));
 
-            reviews.push_back({
-                {"reviewerId", reviewerIdStr},
-                {"decision", decision},
-                {"comments", comments}
-            });
+            reviews.push_back({{"reviewerId", reviewerIdStr}, {"decision", decision}, {"comments", comments}});
         }
 
         return osp::protocol::makeSuccessResponse({{"reviews", reviews}});
@@ -1050,7 +938,7 @@ ServerApp::handlePaperCommand(const osp::protocol::Command&                     
             std::lock_guard<std::mutex> lock(vfsMutex_);
             metaData = vfs_.readFile(metaPath);
         }
-        
+
         if (!metaData)
         {
             return osp::protocol::makeErrorResponse("NOT_FOUND", "Paper not found");
@@ -1070,10 +958,7 @@ ServerApp::handlePaperCommand(const osp::protocol::Command&                     
         std::string newStatus = (decisionStr == "ACCEPT") ? "Accepted" : "Rejected";
 
         std::ostringstream newMeta;
-        newMeta << p_id << "\n"
-                << p_authorId << "\n"
-                << newStatus << "\n"
-                << p_title;
+        newMeta << p_id << "\n" << p_authorId << "\n" << newStatus << "\n" << p_title;
 
         {
             std::lock_guard<std::mutex> lock(vfsMutex_);
@@ -1083,20 +968,16 @@ ServerApp::handlePaperCommand(const osp::protocol::Command&                     
             }
         }
 
-        return osp::protocol::makeSuccessResponse({
-            {"message", "Paper decision updated"},
-            {"paperId", pidStr},
-            {"status", newStatus}
-        });
+        return osp::protocol::makeSuccessResponse({{"message", "Paper decision updated"}, {"paperId", pidStr}, {"status", newStatus}});
     }
 
     return osp::protocol::makeErrorResponse("UNKNOWN_COMMAND", "Unknown paper command: " + cmd.name);
 }
 
-std::uint32_t ServerApp::nextPaperId()
+std::uint32_t PaperService::nextPaperId()
 {
     std::lock_guard<std::mutex> lock(vfsMutex_);
-    
+
     std::string   path   = "/system/next_paper_id";
     std::uint32_t nextId = 1;
 
@@ -1120,170 +1001,7 @@ std::uint32_t ServerApp::nextPaperId()
     return nextId;
 }
 
-osp::protocol::Message
-ServerApp::handleFsCommand(const osp::protocol::Command&                        cmd,
-                           const std::optional<osp::domain::Session>& /*maybeSession*/)
-{
-    using osp::protocol::Message;
-    using osp::protocol::MessageType;
-    using osp::protocol::json;
-
-    if (cmd.name == "MKDIR")
-    {
-        if (cmd.args.empty())
-        {
-            return osp::protocol::makeErrorResponse("MISSING_ARGS", "MKDIR: missing path");
-        }
-        const std::string& path = cmd.args[0];
-
-        bool ok;
-        {
-            std::lock_guard<std::mutex> lock(vfsMutex_);
-            ok = vfs_.createDirectory(path);
-        }
-        
-        if (ok)
-        {
-            return osp::protocol::makeSuccessResponse({{"message", "Directory created"}, {"path", path}});
-        }
-        return osp::protocol::makeErrorResponse("FS_ERROR", "MKDIR failed: " + path);
-    }
-
-    if (cmd.name == "WRITE")
-    {
-        if (cmd.rawArgs.empty())
-        {
-            return osp::protocol::makeErrorResponse("MISSING_ARGS", "WRITE: missing path");
-        }
-
-        std::istringstream iss(cmd.rawArgs);
-        std::string        path;
-        iss >> path;
-        if (path.empty())
-        {
-            return osp::protocol::makeErrorResponse("MISSING_ARGS", "WRITE: missing path");
-        }
-
-        std::string content;
-        std::getline(iss, content);
-        if (!content.empty() && content.front() == ' ')
-        {
-            content.erase(content.begin());
-        }
-
-        bool ok;
-        {
-            std::lock_guard<std::mutex> lock(vfsMutex_);
-            ok = vfs_.writeFile(path, content);
-        }
-        
-        if (ok)
-        {
-            return osp::protocol::makeSuccessResponse({{"message", "File written"}, {"path", path}});
-        }
-        return osp::protocol::makeErrorResponse("FS_ERROR", "WRITE failed: " + path);
-    }
-
-    if (cmd.name == "READ")
-    {
-        if (cmd.args.empty())
-        {
-            return osp::protocol::makeErrorResponse("MISSING_ARGS", "READ: missing path");
-        }
-        const std::string& path = cmd.args[0];
-
-        std::optional<std::string> data;
-        {
-            std::lock_guard<std::mutex> lock(vfsMutex_);
-            data = vfs_.readFile(path);
-        }
-        
-        if (!data)
-        {
-            return osp::protocol::makeErrorResponse("FS_ERROR", "READ failed: " + path);
-        }
-        return osp::protocol::makeSuccessResponse({{"path", path}, {"content", *data}});
-    }
-
-    if (cmd.name == "RM")
-    {
-        if (cmd.args.empty())
-        {
-            return osp::protocol::makeErrorResponse("MISSING_ARGS", "RM: missing path");
-        }
-        const std::string& path = cmd.args[0];
-
-        bool ok;
-        {
-            std::lock_guard<std::mutex> lock(vfsMutex_);
-            ok = vfs_.removeFile(path);
-        }
-        
-        if (ok)
-        {
-            return osp::protocol::makeSuccessResponse({{"message", "File removed"}, {"path", path}});
-        }
-        return osp::protocol::makeErrorResponse("FS_ERROR", "RM failed: " + path);
-    }
-
-    if (cmd.name == "RMDIR")
-    {
-        if (cmd.args.empty())
-        {
-            return osp::protocol::makeErrorResponse("MISSING_ARGS", "RMDIR: missing path");
-        }
-        const std::string& path = cmd.args[0];
-
-        bool ok;
-        {
-            std::lock_guard<std::mutex> lock(vfsMutex_);
-            ok = vfs_.removeDirectory(path);
-        }
-        
-        if (ok)
-        {
-            return osp::protocol::makeSuccessResponse({{"message", "Directory removed"}, {"path", path}});
-        }
-        return osp::protocol::makeErrorResponse("FS_ERROR", "RMDIR failed (maybe not empty?): " + path);
-    }
-
-    if (cmd.name == "LIST")
-    {
-        std::string path = "/";
-        if (!cmd.args.empty())
-        {
-            path = cmd.args[0];
-        }
-
-        std::optional<std::string> listing;
-        {
-            std::lock_guard<std::mutex> lock(vfsMutex_);
-            listing = vfs_.listDirectory(path);
-        }
-        
-        if (!listing)
-        {
-            return osp::protocol::makeErrorResponse("FS_ERROR", "LIST failed: " + path);
-        }
-
-        // 解析目录列表为数组
-        std::stringstream ss(*listing);
-        std::string       entry;
-        json              entries = json::array();
-        while (std::getline(ss, entry))
-        {
-            if (!entry.empty())
-            {
-                entries.push_back(entry);
-            }
-        }
-
-        return osp::protocol::makeSuccessResponse({{"path", path}, {"entries", entries}});
-    }
-
-    return osp::protocol::makeErrorResponse("UNKNOWN_COMMAND", "Unknown FS command: " + cmd.name);
-}
-
-#endif
-
 } // namespace osp::server
+
+
+

@@ -8,6 +8,13 @@
 
 #include "domain/auth.hpp"
 
+#include "server/handlers/admin_handler.hpp"
+#include "server/handlers/author_handler.hpp"
+#include "server/handlers/editor_handler.hpp"
+#include "server/handlers/reviewer_handler.hpp"
+#include "server/services/fs_service.hpp"
+#include "server/services/paper_service.hpp"
+
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
@@ -41,19 +48,6 @@ private:
     handleCommand(const osp::protocol::Command&                        cmd,
                   const std::optional<osp::domain::Session>& maybeSession);
 
-    // 目前已实现的一小部分命令分组：文件系统相关命令
-    osp::protocol::Message
-    handleFsCommand(const osp::protocol::Command&                        cmd,
-                    const std::optional<osp::domain::Session>& maybeSession);
-
-    // 论文管理相关命令
-    osp::protocol::Message
-    handlePaperCommand(const osp::protocol::Command&                        cmd,
-                       const std::optional<osp::domain::Session>& maybeSession);
-
-    // 辅助函数：获取并自增下一个 Paper ID
-    std::uint32_t nextPaperId();
-
     // 初始化 AuthService 的 VFS 操作接口
     void initAuthVfsOperations();
 
@@ -63,9 +57,18 @@ private:
     osp::fs::Vfs             vfs_;
     osp::domain::AuthService auth_; // 认证与会话管理
 
-    // 互斥锁保护共享资源
+    // 互斥锁保护共享资源（必须先于 service/handler 构造）
     mutable std::mutex vfsMutex_;   // 保护 VFS 访问
     mutable std::mutex authMutex_;  // 保护 AuthService 访问
+
+    // 服务与处理器（降低 ServerApp 耦合：ServerApp 只做“路由 + 资源持有”）
+    FsService    fsService_;
+    PaperService paperService_;
+
+    AdminHandler    adminHandler_;
+    EditorHandler   editorHandler_;
+    AuthorHandler   authorHandler_;
+    ReviewerHandler reviewerHandler_;
 };
 
 } // namespace osp::server

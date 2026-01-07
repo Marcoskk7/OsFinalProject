@@ -1,0 +1,379 @@
+# OsFinalProject 研究型课程报告：基于自定义文件系统的学术评审系统（C++ Client–Server）
+
+## 1. Introduction（引言）
+
+### 1.1 问题陈述
+学术会议与期刊依赖在线评审系统完成论文提交、审稿分配、评审意见汇聚与最终录用决策等流程。课程《操作系统》大作业以“简化学术评审系统”为载体，要求学生在**可运行的 Client–Server 系统**中综合体现操作系统核心主题：文件系统组织与持久化、并发访问、缓存管理、网络协议与安全控制等。
+
+本项目（`OsFinalProject`）聚焦的问题是：**如何在一个可扩展、可验证的 C/S 架构中，将评审业务数据持久化到自研简化文件系统（VFS）并支持多客户端并发访问，同时提供缓存统计与备份/恢复能力，形成可演示的端到端评审工作流。**
+
+### 1.2 研究意义（与操作系统主题的关联）
+该项目将“业务系统”与“系统软件能力”绑定，使抽象 OS 概念能够落地到可观察行为：
+
+- **文件系统（VFS）**：在单一磁盘文件 `data.fs` 上实现 superblock、inode table、free bitmap 与数据块区，支持目录/文件的创建、删除、读写与路径解析（`src/server/filesystem/vfs.*`）。
+- **缓存（LRU BlockCache）**：在块读写路径上引入 LRU 块缓存并输出命中、缺失、替换统计（`src/server/filesystem/block_cache.hpp` + `Vfs::readBlock/writeBlock`）。
+- **并发**：服务端 TCP 监听线程 + 线程池并发处理连接；对共享资源（VFS、Auth）使用互斥锁保障一致性（`src/server/net/tcp_server.*`、`src/server/server_app.*`）。
+- **网络协议**：基于 TCP 的长度前缀 framing，消息 envelope 使用 JSON，命令抽象统一为 `Command`（`src/common/protocol.hpp`）。
+- **鉴权与权限控制**：会话（Session）与 RBAC 权限矩阵保证不同角色执行不同命令（`src/domain/auth.*`、`src/domain/permissions.*`）。
+- **系统可运维性**：提供 `VIEW_SYSTEM_STATUS` 输出系统与缓存统计；提供 `BACKUP/RESTORE` 将系统状态进行快照与回滚（`src/server/server_app.cpp`）。
+
+### 1.3 研究目标与贡献
+围绕课程指引，本项目的主要目标与贡献如下（均可在代码中对应定位）：
+
+1. **实现可运行的 C/S 评审系统骨架**：包含 CLI 客户端、TCP 服务端、统一命令路由框架（`Cli`、`TcpServer`、`ServerApp`）。
+2. **实现自定义简化文件系统（VFS）并持久化业务数据**：以 `data.fs` 为“虚拟磁盘”，实现目录树与文件读写（`Vfs`）。
+3. **实现块级 LRU 缓存并提供统计观测**：命中/缺失/替换计数可通过系统命令获取（`BlockCache::Stats` + `VIEW_SYSTEM_STATUS`）。
+4. **实现登录/会话与 RBAC 权限控制**：角色包括 Author/Reviewer/Editor/Admin；权限检查集中在服务端命令处理路径（`AuthService` + `hasPermission`）。
+5. **实现评审工作流的关键命令集合**：提交论文、分配审稿人、提交评审、查看评审、最终决定；并扩展“修订版本历史”与“审稿人推荐”（`ServerApp::handlePaperCommand`）。
+6. **实现备份/恢复**：以文件快照方式对 `data.fs` 做备份与恢复，并在恢复时对 VFS 与 Auth 做一致性保护（`BACKUP`/`RESTORE` 分支）。
+7. **提供 HTTP→TCP 网关与 Web UI（可选演示）**：Node/Express 网关将 Web 请求桥接为 TCP JSON 协议，便于可视化演示（`gateway/server.js`、`web/*.html`）。
+
+---
+
+## 2. Implementation Details（实现细节）
+
+### 2.1 总体架构与分层
+系统采用典型三层思想（交互层/服务层/存储层）并以网络协议贯穿：
+
+- **交互层**：CLI 客户端（`src/client/cli.*`）与可选 Web UI（`web/`）。
+- **服务层**：服务端应用 `ServerApp`（`src/server/server_app.*`），负责鉴权、权限、业务路由、备份恢复与系统状态输出。
+- **存储层**：自定义 VFS（`src/server/filesystem/vfs.*`）+ LRU 块缓存（`block_cache.hpp`），所有业务数据最终落盘到 `data.fs`。
+
+![系统架构（Client ⇄ TCP ⇄ ServerApp ⇄ VFS ⇄ data.fs）](assets/architecture.png)
+
+### 2.2 通信协议：长度前缀 + JSON Envelope + 统一 Command
+
+#### 2.2.1 传输层 framing（避免粘包/拆包）
+TCP 是字节流，必须自行定义消息边界。本项目采用：
+\[
+\text{Frame} = \text{len}_{32\text{-bit big-endian}} \; || \; \text{JSON bytes (len)}
+\]
+其中 `TcpServer::sendMessage/recvMessage` 与 `TcpClient::sendMessage/recvMessage` 均按此规则收发（`src/server/net/tcp_server.cpp`、`src/client/net/tcp_client.cpp`）。
+
+#### 2.2.2 消息封装（Envelope）
+在 framing 之上，消息统一封装为 JSON：
+`{"type":"CommandRequest","payload":{...}}`，其中 `type` 取值为 `MessageType` 的字符串形式（`src/common/protocol.hpp`）。
+
+![协议封装示例（Envelope：type + payload）](assets/protocol_envelope_demo.png)
+
+#### 2.2.3 命令抽象（Command）
+服务端不直接解析“原始字符串”，而是解析统一结构：
+
+- `cmd`：命令名（如 `LOGIN`/`SUBMIT`/`LIST`）
+- `args`：按空格切分参数数组
+- `rawArgs`：保留原始参数串（用于包含空格的内容，如论文内容与评审意见）
+- `sessionId`：登录后客户端自动携带（未登录为 `null`）
+
+该抽象实现了**协议与业务解耦**：新增命令只需在 `ServerApp` 路由中添加分支，传输层与客户端无需改变 framing。
+
+### 2.3 服务端核心：请求处理流水线与命令路由
+
+#### 2.3.1 请求处理流水线
+服务端入口函数链路清晰：
+`TcpServer` 收到消息 → 反序列化为 `Message` → `ServerApp::handleRequest` →（可选）校验 session → `ServerApp::handleCommand` 分发 → 组装响应 `Message` → 回写客户端。
+
+建议流程图（Mermaid，可直接粘贴到支持 Mermaid 的 Markdown 渲染器）：
+
+```mermaid
+flowchart LR
+  A[Client: 输入命令/菜单向导] --> B[parseCommandLine -> Command]
+  B --> C[Command -> JSON payload -> Message envelope]
+  C --> D[TCP: len + json bytes]
+  D --> E[TcpServer: recvMessage -> deserialize]
+  E --> F[ServerApp::handleRequest]
+  F --> G{sessionId ?}
+  G -- no --> I[handleCommand 路由]
+  G -- yes --> H[AuthService::validateSession]
+  H -- invalid --> R[Error: INVALID_SESSION]
+  H -- valid --> I
+  I --> J{命令类型}
+  J -->|FS| K[handleFsCommand -> Vfs]
+  J -->|Paper| L[handlePaperCommand -> Vfs/Auth]
+  J -->|Admin| M[MANAGE_USERS/BACKUP/RESTORE/STATUS]
+  K --> N[makeSuccess/makeError]
+  L --> N
+  M --> N
+  N --> O[TcpServer: sendMessage]
+  O --> P[Client: 打印 JSON 响应]
+```
+
+#### 2.3.2 命令路由与职责分离
+`ServerApp::handleCommand` 采用“按命令名分组”的路由策略：
+
+- **基础连通**：`PING`（立即返回 `PONG`）
+- **认证**：`LOGIN`（校验用户名/密码，返回 `sessionId/userId/role`）
+- **文件系统**：`MKDIR/WRITE/READ/RM/RMDIR/LIST`
+- **论文流程**：`SUBMIT/LIST_PAPERS/GET_PAPER/ASSIGN/REVIEW/LIST_REVIEWS/DECISION/REVISE/SET_PAPER_FIELDS`
+- **推荐与管理**：`RECOMMEND_REVIEWERS`、`MANAGE_USERS`、`VIEW_SYSTEM_STATUS`、`BACKUP/RESTORE`
+
+这种设计使得业务扩展只影响路由与对应 handler，而不影响协议与网络层。
+
+### 2.4 并发模型与一致性控制
+
+#### 2.4.1 并发连接处理
+`TcpServer::start` 在主线程 `listen + accept`，每接入一个连接就把 `handleClient(fd)` 投递到线程池（`ThreadPool`）。每个连接线程在 `handleClient` 内**循环处理多个请求**（支持持久连接），直到客户端断开或发送失败。
+
+#### 2.4.2 共享资源互斥
+服务端存在两类共享资源：
+
+- **VFS 共享状态**：底层文件句柄、缓存、inode/bitmap 等元数据；由 `vfsMutex_` 保护。
+- **AuthService 共享状态**：内存会话表、用户表；由 `authMutex_` 保护。
+
+典型策略：
+- 普通命令：只锁涉及的资源（例如文件系统命令只锁 VFS）。
+- 恢复（`RESTORE`）：同时影响 VFS 与用户数据，因此使用 `std::scoped_lock(vfsMutex_, authMutex_)` 一次性获取两个锁，避免交叉持锁导致死锁，并保证恢复期间系统对外表现一致。
+
+### 2.5 自定义文件系统（VFS）设计
+
+#### 2.5.1 磁盘布局与格式化
+VFS 将单一文件 `data.fs` 视为固定容量“虚拟磁盘”。挂载时如果文件不存在或 magic 不匹配，则格式化新文件系统（`Vfs::mount` + `Vfs::formatNewFileSystem`）。
+
+固定布局参数（由代码设定）：
+- Block Size：4096 bytes
+- Total Blocks：1024
+- inode table：8 blocks
+- free bitmap：1 block（最多可表示 4096×8 bits 个数据块）
+- data blocks：剩余 blocks
+
+![文件系统布局（superblock / inode table / bitmap / data blocks）](assets/fs_layout.png)
+
+#### 2.5.2 核心数据结构
+- **SuperBlock**：记录魔数、块大小、块总数、各区域起始位置与数量、root inode id。
+- **Inode**：记录 inode id、是否目录、size、直接块数组 `directBlocks[]`（简化实现：仅支持 direct blocks）。
+- **DirEntry**：目录项（定长 name + inodeId），目录文件存储为 DirEntry 数组。
+
+#### 2.5.3 路径解析（resolvePath）
+路径解析采用“逐级目录遍历”：
+
+```text
+resolvePath(path):
+  if path == "/" -> root inode
+  comps = split(path, '/')
+  cur = root
+  for name in comps:
+    ensure cur is directory
+    entries = readDirectory(cur)
+    find entry.name == name
+    cur = entry.inodeId
+  return cur
+```
+
+这种实现满足多级目录解析要求，并支持 `LIST /a/b`、`READ /papers/1/content.txt` 等业务路径。
+
+#### 2.5.4 数据块分配：free bitmap
+数据块分配采用位图 first-fit 扫描（`Vfs::allocDataBlock`）：
+
+```text
+allocDataBlock():
+  for each bitmap block:
+    for each bit:
+      if bit == 0:
+        set bit = 1; persist bitmap block
+        return dataBlockStart + globalBitIndex
+  return failure
+```
+
+释放则将对应 bit 清零（`Vfs::freeDataBlock`）。
+
+#### 2.5.5 文件读写：direct blocks + 覆盖式写入
+写文件 `Vfs::writeFile` 流程：
+- 若文件不存在则创建 inode 与目录项（`createFile`）
+- **覆盖式写入**：释放原先占用的数据块，再按块大小切片写入新内容
+- 若内容超过 `MaxDirectBlocks * blockSize` 则失败（简化限制）
+
+读文件 `Vfs::readFile` 按 inode.size 依次读取 direct blocks，拼接为字符串返回。
+
+#### 2.5.6 LRU 块缓存（BlockCache）
+`BlockCache` 使用：
+- `unordered_map<blockId, Entry>` 做索引
+- `list<blockId>` 维护 LRU 顺序
+
+读块路径 `Vfs::readBlock`：先查 cache，命中直接返回；未命中则从 `data.fs` 读取并写入 cache。写块路径 `Vfs::writeBlock`：写盘成功后更新 cache。
+
+该缓存使得重复访问（例如多次 `LIST`、多次读取同一文件）呈现可观测的命中率提升。
+
+![LRU 块缓存统计（VIEW_SYSTEM_STATUS）](assets/cache_stats.png)
+
+### 2.6 鉴权与权限控制（RBAC）
+
+#### 2.6.1 会话模型
+`LOGIN <user> <pass>` 成功后返回 `sessionId`，客户端在后续命令自动携带（`Cli::buildJsonPayload`）。会话存储于 `AuthService::sessionsById_`（内存态），满足演示所需的鉴权链路。
+
+#### 2.6.2 用户持久化到 VFS
+与许多课程项目不同，本实现将**用户表持久化到 VFS**：
+- 用户目录：`/system/users/`
+- 单用户文件：`/system/users/<username>.txt`，内容为 `id\npassword\nrole`
+- nextUserId：`/system/next_user_id`
+
+服务端启动时 `ServerApp::initAuthVfsOperations` 注入 VFS 操作接口，再调用 `auth_.loadUsers()` 从 VFS 恢复用户表，若为空则创建默认账号（admin/author/author2/reviewer/editor）。
+
+#### 2.6.3 权限矩阵
+权限检查函数 `hasPermission(role, Permission)` 实现 RBAC：
+- Author：可提交论文/修订、查看自己状态、查看自己评审
+- Reviewer：可下载被分配论文、提交评审、查看分配状态
+- Editor：可分配审稿人、最终决策、查看系统状态
+- Admin：最高权限（允许所有）
+
+服务端在论文命令与管理命令入口处进行权限判断，保证安全边界。
+
+### 2.7 论文评审工作流：数据组织与命令语义
+
+#### 2.7.1 数据在 VFS 中的布局
+论文数据以目录树形式持久化，例如：
+
+- `/papers/<paperId>/meta.txt`：论文元信息（id、authorId、status、title）
+- `/papers/<paperId>/content.txt`：正文
+- `/papers/<paperId>/fields.txt`：领域标签（CSV，便于推荐）
+- `/papers/<paperId>/reviewers.txt`：被分配审稿人的 userId 列表
+- `/papers/<paperId>/reviews/<reviewerId>.txt`：评审（decision + comments）
+- `/papers/<paperId>/revisions/vN.txt`：修订历史（保存旧版本）
+- `/system/next_paper_id`：自增论文编号
+
+![VFS 数据树示意（LIST 输出目录树）](assets/vfs_data_tree.png)
+
+#### 2.7.2 核心命令与状态机
+论文状态机采用简化形式：
+Submitted →（Assign）→ UnderReview（可隐含）→（Decision）→ Accepted/Rejected；修订会将状态重置为 Submitted。
+
+- **提交（Author）**：`SUBMIT <Title> <Content...>` 创建论文目录、写 content 与 meta，分配 paperId。
+- **修订（Author）**：`REVISE <PaperID> <NewContent...>` 将旧 content 写入 `revisions/vN.txt`，再写入新 content，并更新 meta 状态。
+- **分配（Editor/Admin）**：`ASSIGN <PaperID> <ReviewerUsername>` 将 reviewerId 追加到 `reviewers.txt`，防止重复分配。
+- **评审（Reviewer）**：`REVIEW <PaperID> <Decision> <Comments...>` 要求该 reviewer 已在 `reviewers.txt` 中，否则拒绝；评审写入 `reviews/<reviewerId>.txt`。
+- **查看评审（Author/Editor/Admin）**：`LIST_REVIEWS <PaperID>` Author 仅能看自己的论文评审。
+- **最终决定（Editor/Admin）**：`DECISION <PaperID> <ACCEPT|REJECT>` 更新 meta 的 status 字段。
+
+#### 2.7.3 审稿人推荐（Editor/Admin）
+为提升“课程设计系统性”，本项目加入**基于领域标签的推荐**：
+- 管理员可通过 `MANAGE_USERS UPDATE_FIELDS <username> <fieldsCsv>` 为 Reviewer 设置研究领域（持久化至 `/system/reviewer_fields/<userId>.txt`）。
+- 作者提交时可选择论文领域，随后通过 `SET_PAPER_FIELDS` 写入 `fields.txt`。
+- 编辑在指派阶段可调用 `RECOMMEND_REVIEWERS <PaperID> [limit]`，系统计算论文领域集合与审稿人领域集合的交集大小作为 score，输出 Top-K 候选列表。
+
+该功能体现了“数据持久化 + 权限控制 + 业务策略”的协同实现，并可在 CLI 编辑菜单向导中自动展示推荐列表（`Cli::handleEditorMenuInput`）。
+
+### 2.8 备份与恢复：一致性与可恢复性
+`BACKUP <dstPath>`：先 `vfs_.sync()` 确保 flush，再对 `data.fs` 做整文件复制（快照式备份）。
+
+`RESTORE <srcPath>`：检查文件存在后，同时锁住 VFS 与 Auth：
+1) 关闭旧 VFS 文件句柄并清空缓存（`Vfs::remount`）
+2) 将 `srcPath` 覆盖拷贝为 `data.fs`
+3) 重新 mount 并重新加载用户表（`auth_.loadUsers()`）
+
+该设计以最小复杂度实现了课程要求的“备份/恢复”，并保留未来扩展为增量或写时复制快照的空间。
+
+---
+
+## 3. Execution Instruction（编译与运行说明）
+
+### 3.1 编译环境与依赖
+- **C++**：C++17（项目 `CMakeLists.txt` 指定 `CMAKE_CXX_STANDARD 17`）
+- **构建系统**：CMake ≥ 3.14
+- **Node 网关（可选）**：Node.js + npm；依赖 `express`
+
+### 3.2 编译步骤（CMake）
+在项目根目录（`OsFinalProject/`）执行：
+
+```bash
+mkdir -p build
+cd build
+cmake ..
+cmake --build .
+```
+
+产物位于 `build/src/`：
+- `osproj_server`
+- `osproj_client`
+
+清理构建产物：
+
+```bash
+cmake --build . --target clean
+```
+
+![构建成功与产物位置](assets/build_success.png)
+
+### 3.3 运行步骤（CLI）
+
+#### 3.3.1 启动服务端
+
+```bash
+./build/src/osproj_server [port] [cacheCapacity]
+```
+
+- **port**：监听端口，默认 `5555`
+- **cacheCapacity**：LRU cache 容量（entries），默认 `64`
+- **环境变量覆盖**：`OSP_CACHE_CAPACITY` 可覆盖默认缓存容量（若同时提供命令行参数，以命令行为准）
+
+#### 3.3.2 启动客户端
+
+```bash
+./build/src/osproj_client
+```
+
+客户端默认连接 `127.0.0.1:5555`（`src/client/main.cpp`）。
+
+#### 3.3.3 推荐的演示命令序列（端到端）
+1) `PING`
+2) `LOGIN author author`
+3) 提交论文：`SUBMIT t1 hello world`（也可使用 Author 数字菜单向导）
+4) 切换编辑：`LOGIN editor editor`
+5) 查看论文：`LIST_PAPERS`
+6) 推荐并分配审稿人：
+   - `RECOMMEND_REVIEWERS 1 5`（需要先配置 reviewer 领域与 paper 领域时效果更明显）
+   - `ASSIGN 1 reviewer`
+7) 切换审稿人：`LOGIN reviewer reviewer`
+8) 审稿：`REVIEW 1 ACCEPT good work`
+9) 切换编辑：`LOGIN editor editor`
+10) 查看评审：`LIST_REVIEWS 1`
+11) 最终决定：`DECISION 1 ACCEPT`
+12) 管理员查看系统状态：`LOGIN admin admin` → `VIEW_SYSTEM_STATUS`
+13) 备份与恢复：`BACKUP backup.fs` →（可选更改数据）→ `RESTORE backup.fs`
+
+### 3.4 运行步骤（Web UI，可选）
+该模式用于更直观展示系统功能，但本质仍通过网关访问 C++ TCP 服务端。
+
+1) 确保 C++ 服务端已启动（默认 `127.0.0.1:5555`）。
+2) 启动网关：
+
+```bash
+cd gateway
+npm install
+npm start
+```
+
+3) 打开浏览器访问网关首页（默认 `http://localhost:3000`，入口为 `login.html`）。
+
+可用环境变量：
+- `TCP_HOST`（默认 `127.0.0.1`）
+- `TCP_PORT`（默认 `5555`）
+- `PORT`（HTTP 端口，默认 `3000`）
+
+---
+
+## 4. Result Presentation（结果展示）
+
+本节通过截图说明系统关键功能已可运行与可验证。截图文件位于 `report/assets/`，在最终提交报告时可直接引用或粘贴到 Word/PDF。
+
+### 4.1 架构与模块划分
+![系统架构图](assets/architecture.png)
+
+### 4.2 协议封装与可调试性
+![协议 Envelope 请求/响应示例](assets/protocol_envelope_demo.png)
+
+### 4.3 文件系统布局与持久化（data.fs）
+![文件系统布局示意图](assets/fs_layout.png)
+
+### 4.4 VFS 数据树与业务数据落盘
+![VFS 数据树展示](assets/vfs_data_tree.png)
+
+### 4.5 LRU 缓存统计与系统状态观测
+![缓存统计展示（hits/misses/replacements）](assets/cache_stats.png)
+
+### 4.6 CLI 角色命令/向导（可用性）
+![CLI 角色帮助/菜单](assets/cli_role_help.png)
+
+### 4.7 端到端流程演示（提交→分配→评审→决策）
+![端到端业务演示](assets/e2e_demo.png)
+
+---
+
+**结论**：OsFinalProject 通过“统一协议 + 并发 TCP 服务端 + 可持久化的自研 VFS + LRU 块缓存 + 会话与 RBAC 权限控制”的组合，实现了可运行的简化评审系统并满足课程对 OS 核心主题的综合训练要求。后续可进一步在 VFS 上扩展间接块/多块目录、引入更严格的一致性机制（日志/崩溃恢复），并在并发场景下细化锁粒度以提升吞吐。

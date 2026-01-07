@@ -38,6 +38,18 @@ target_link_libraries(osproj_fs
 add_library(osproj_server_core
     server/server_app.hpp
     server/server_app.cpp
+    server/services/fs_service.hpp
+    server/services/fs_service.cpp
+    server/services/paper_service.hpp
+    server/services/paper_service.cpp
+    server/handlers/admin_handler.hpp
+    server/handlers/admin_handler.cpp
+    server/handlers/editor_handler.hpp
+    server/handlers/editor_handler.cpp
+    server/handlers/author_handler.hpp
+    server/handlers/author_handler.cpp
+    server/handlers/reviewer_handler.hpp
+    server/handlers/reviewer_handler.cpp
     server/net/tcp_server.hpp
     server/net/tcp_server.cpp
 )
